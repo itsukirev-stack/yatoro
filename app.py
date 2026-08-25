@@ -20,7 +20,31 @@ GIFT_ID = "SIMPLE_BEAR_ID"  # ЗАМЕНИТЕ
 
 WAITING_FOR_RECIPIENT = 1
 purchase_history = []
-users = []  # Список ID пользователей для рассылки
+
+# ========== ПОЛЬЗОВАТЕЛИ (ЖЕСТКИЙ СПИСОК) ==========
+users = [
+    1063566670, 1706296392, 6086019488, 818549482, 8179993565,
+    5291915479, 1997847677, 5053531607, 7613664425, 1551895486,
+    6666249677, 1671727568, 6806681335, 6278658617, 1497318161,
+    2004469073, 6682950414, 561123453, 5826934033, 716129320,
+    5284725069, 7611609480, 985393449, 2076260534, 8365386325,
+    5197774712, 8537366273, 1434031010, 5564666822, 1819861991,
+    6765046238, 7351012103
+]
+
+# Сохраняем в файл при запуске
+def save_users_to_file():
+    try:
+        with open('users.txt', 'w', encoding='utf-8') as f:
+            for user_id in users:
+                f.write(f"{user_id}|imported|imported|{datetime.now()}\n")
+        print(f"✅ Сохранено {len(users)} пользователей в users.txt")
+    except Exception as e:
+        print(f"❌ Ошибка сохранения: {e}")
+
+save_users_to_file()
+print(f"👥 Загружено {len(users)} пользователей")
+# ==================================================
 
 SIGNATURES = [
     "Короля не убить",
@@ -30,10 +54,10 @@ SIGNATURES = [
 
 logging.basicConfig(level=logging.INFO)
 
-# ========== ЗАГРУЗКА ПОЛЬЗОВАТЕЛЕЙ ==========
+# ========== ЗАГРУЗКА ПОЛЬЗОВАТЕЛЕЙ ИЗ ФАЙЛА ==========
 
-def load_users():
-    """Загружает пользователей из файла"""
+def load_users_from_file():
+    """Загружает пользователей из файла (если есть)"""
     try:
         with open('users.txt', 'r', encoding='utf-8') as f:
             for line in f:
@@ -41,9 +65,9 @@ def load_users():
                     user_id = int(line.split('|')[0])
                     if user_id not in users:
                         users.append(user_id)
-        print(f"👥 Загружено {len(users)} пользователей")
+        print(f"👥 Загружено {len(users)} пользователей из файла")
     except FileNotFoundError:
-        print("📁 Файл users.txt не найден, создаю новый...")
+        print("📁 Файл users.txt не найден")
 
 def save_user(user_id, username, full_name):
     """Сохраняет нового пользователя"""
@@ -245,6 +269,67 @@ async def add_user(update: Update, context: CallbackContext):
             await update.message.reply_text(f"⚠️ Пользователь {user_id} уже есть в списке.")
     except ValueError:
         await update.message.reply_text("❌ ID должен быть числом!")
+
+async def add_users_batch(update: Update, context: CallbackContext):
+    """Добавляет нескольких пользователей через пробел (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "✏️ Использование: /addusers ID1 ID2 ID3 ...\n"
+            "Пример: /addusers 123456789 987654321 555555555"
+        )
+        return
+    
+    added = 0
+    already = 0
+    invalid = 0
+    
+    for arg in context.args:
+        try:
+            user_id = int(arg)
+            if user_id not in users:
+                users.append(user_id)
+                added += 1
+            else:
+                already += 1
+        except ValueError:
+            invalid += 1
+    
+    # Сохраняем в файл
+    if added > 0:
+        try:
+            with open('users.txt', 'a', encoding='utf-8') as f:
+                for user_id in users[-added:]:
+                    f.write(f"{user_id}|manual|manual|{datetime.now()}\n")
+        except Exception as e:
+            print(f"Ошибка сохранения: {e}")
+    
+    await update.message.reply_text(
+        f"✅ **Добавлено пользователей:**\n\n"
+        f"➕ Добавлено: {added}\n"
+        f"⚠️ Уже были: {already}\n"
+        f"❌ Неверных ID: {invalid}\n"
+        f"👥 Всего: {len(users)}"
+    )
+
+async def test(update: Update, context: CallbackContext):
+    """Тестовая команда"""
+    await update.message.reply_text(f"✅ Бот работает! Твой ID: {update.effective_user.id}")
+
+async def reset_webhook(update: Update, context: CallbackContext):
+    """Сбрасывает webhook (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    try:
+        await context.bot.delete_webhook()
+        await update.message.reply_text("✅ Webhook удален! Бот перезапущен с polling.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
 
 # ========== ОСНОВНОЙ КОД БОТА ==========
 
@@ -595,8 +680,8 @@ async def successful_payment(update: Update, context: CallbackContext):
 
 def main():
     """Основная функция запуска бота"""
-    # Загружаем пользователей
-    load_users()
+    # Загружаем пользователей из файла (если есть)
+    load_users_from_file()
     
     application = Application.builder().token(TOKEN).build()
     
@@ -628,6 +713,9 @@ def main():
     application.add_handler(CommandHandler("users", users_list))
     application.add_handler(CommandHandler("import", import_users_file))
     application.add_handler(CommandHandler("adduser", add_user))
+    application.add_handler(CommandHandler("addusers", add_users_batch))
+    application.add_handler(CommandHandler("test", test))
+    application.add_handler(CommandHandler("resetwebhook", reset_webhook))
     
     print("🤖 Бот запущен...")
     print(f"👤 Владелец: {OWNER_ID}")
