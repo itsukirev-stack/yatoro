@@ -15,7 +15,7 @@ OWNER_ID = 8619742582
 PRICE_STARS = 20
 STEAM_PRICE_STARS = 350
 GIFT_COST = 15
-GIFT_ID = "SIMPLE_BEAR_ID"  # ЗАМЕНИТЕ НА ПРАВИЛЬНЫЙ ID МЕДВЕДЯ
+GIFT_ID = "5170233102089322756"  # ЗАМЕНИТЕ НА ПРАВИЛЬНЫЙ ID МЕДВЕДЯ
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
