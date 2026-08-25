@@ -17,12 +17,18 @@ OWNER_ID = 8619742582
 PRICE_STARS = 20
 STEAM_PRICE_STARS = 350
 GIFT_COST = 15
-GIFT_ID = "SIMPLE_BEAR_ID"
+GIFT_ID = "5170233102089322756"
+
+# Каналы для подписки
+REQUIRED_CHANNELS = [
+    {"name": "Yatorokale", "url": "https://t.me/Yatorokale", "chat_id": "@Yatorokale"},
+    {"name": "Team Spirit Official", "url": "https://t.me/Team_Spirit_Official", "chat_id": "@Team_Spirit_Official"}
+]
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
 purchase_history = []
-steam_orders = []  # Список заказов на роспись в Steam
+steam_orders = []
 users = []
 
 # ========== ПОЛЬЗОВАТЕЛИ ==========
@@ -55,7 +61,6 @@ def save_users():
         pass
 
 def save_steam_orders():
-    """Сохраняет заказы в файл"""
     try:
         with open('steam_orders.json', 'w', encoding='utf-8') as f:
             json.dump(steam_orders, f, ensure_ascii=False, indent=2)
@@ -63,7 +68,6 @@ def save_steam_orders():
         print(f"Ошибка сохранения заказов: {e}")
 
 def load_steam_orders():
-    """Загружает заказы из файла"""
     try:
         with open('steam_orders.json', 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -80,6 +84,122 @@ def save_user(user_id, username, full_name):
             pass
         return True
     return False
+
+# ========== ПРОВЕРКА ПОДПИСКИ ==========
+
+async def check_subscription(update: Update, context: CallbackContext) -> bool:
+    """Проверяет, подписан ли пользователь на все каналы"""
+    user_id = update.effective_user.id
+    
+    # Владельца не проверяем
+    if user_id == OWNER_ID:
+        return True
+    
+    not_subscribed = []
+    
+    for channel in REQUIRED_CHANNELS:
+        try:
+            chat_member = await context.bot.get_chat_member(
+                chat_id=channel['chat_id'],
+                user_id=user_id
+            )
+            # Проверяем статус
+            if chat_member.status not in ['member', 'administrator', 'creator']:
+                not_subscribed.append(channel)
+        except Exception as e:
+            # Если не можем проверить - считаем что не подписан
+            not_subscribed.append(channel)
+    
+    if not_subscribed:
+        # Создаем клавиатуру с кнопками для подписки
+        keyboard = []
+        for channel in not_subscribed:
+            keyboard.append([InlineKeyboardButton(
+                f"📢 Подписаться на {channel['name']}",
+                url=channel['url']
+            )])
+        
+        # Кнопка проверки
+        keyboard.append([InlineKeyboardButton(
+            "✅ Я подписался! Проверить",
+            callback_data="check_subscription"
+        )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Формируем текст
+        channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
+        
+        await update.message.reply_text(
+            f"⚠️ **Для использования бота необходимо подписаться на каналы!**\n\n"
+            f"🔥 Подпишись на:\n{channels_text}\n\n"
+            f"После подписки нажми кнопку «✅ Я подписался! Проверить»\n\n"
+            f"🎁 Только для подписчиков доступны эксклюзивные росписи и скидки!",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return False
+    
+    return True
+
+async def check_subscription_callback(update: Update, context: CallbackContext):
+    """Проверяет подписку по нажатию кнопки"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    # Владельца не проверяем
+    if user_id == OWNER_ID:
+        await query.edit_message_text("✅ Вы владелец, доступ открыт!")
+        return
+    
+    not_subscribed = []
+    
+    for channel in REQUIRED_CHANNELS:
+        try:
+            chat_member = await context.bot.get_chat_member(
+                chat_id=channel['chat_id'],
+                user_id=user_id
+            )
+            if chat_member.status not in ['member', 'administrator', 'creator']:
+                not_subscribed.append(channel)
+        except:
+            not_subscribed.append(channel)
+    
+    if not_subscribed:
+        # Создаем клавиатуру с кнопками для подписки
+        keyboard = []
+        for channel in not_subscribed:
+            keyboard.append([InlineKeyboardButton(
+                f"📢 Подписаться на {channel['name']}",
+                url=channel['url']
+            )])
+        
+        keyboard.append([InlineKeyboardButton(
+            "✅ Я подписался! Проверить",
+            callback_data="check_subscription"
+        )])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
+        
+        await query.edit_message_text(
+            f"⚠️ **Вы ещё не подписаны на все каналы!**\n\n"
+            f"🔥 Подпишись на:\n{channels_text}\n\n"
+            f"После подписки нажми кнопку «✅ Я подписался! Проверить»",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Все проверки пройдены
+    await query.edit_message_text(
+        "✅ **Спасибо за подписку!**\n\n"
+        "🔥 Теперь вам доступны все функции бота!\n"
+        "Нажмите /start чтобы продолжить."
+    )
 
 # ========== КОМАНДЫ ДЛЯ ВЛАДЕЛЬЦА ==========
 
@@ -206,11 +326,9 @@ async def test(update: Update, context: CallbackContext):
 # ========== СИСТЕМА ОЧЕРЕДИ ДЛЯ STEAM ==========
 
 def get_initial_position():
-    """Возвращает случайную позицию от 400 до 500"""
     return random.randint(400, 500)
 
 async def check_steam_orders(context: CallbackContext):
-    """Проверяет заказы каждую минуту и уменьшает позицию"""
     global steam_orders
     
     if not steam_orders:
@@ -220,15 +338,12 @@ async def check_steam_orders(context: CallbackContext):
     orders_to_remove = []
     
     for i, order in enumerate(steam_orders):
-        # Уменьшаем позицию только у оплаченных заказов
         if order.get('paid', False) and order['position'] > 0:
             order['position'] -= 1
         
-        # Проверяем, не прошло ли 24 часа (только для оплаченных)
         if order.get('paid', False):
             created_at = datetime.fromisoformat(order['created_at'])
             if now - created_at >= timedelta(hours=24):
-                # Отправляем уведомление о доставке
                 try:
                     await context.bot.send_message(
                         chat_id=order['user_id'],
@@ -240,17 +355,14 @@ async def check_steam_orders(context: CallbackContext):
                 except:
                     pass
     
-    # Удаляем доставленные заказы (в обратном порядке)
     for i in sorted(orders_to_remove, reverse=True):
         steam_orders.pop(i)
     
     save_steam_orders()
 
 async def steam_status(update: Update, context: CallbackContext):
-    """Показывает статус заказа"""
     user_id = update.effective_user.id
     
-    # Ищем заказ пользователя
     order = next((o for o in steam_orders if o['user_id'] == user_id), None)
     
     if not order:
@@ -260,17 +372,15 @@ async def steam_status(update: Update, context: CallbackContext):
         )
         return
     
-    # Если заказ не оплачен
     if not order.get('paid', False):
         await update.message.reply_text(
-            "⚠️ **У вас есть активный заказ, но он не оплачен!**\n\n"
-            "💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
+            f"⚠️ **У вас есть активный заказ, но он не оплачен!**\n\n"
+            f"💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
             "Оплатите заказ, чтобы начать обработку.\n"
             "Используйте кнопку **'Роспись в Steam от Yatoro'** для оплаты."
         )
         return
     
-    # Если заказ оплачен - показываем позицию
     position = order['position']
     created_at = datetime.fromisoformat(order['created_at'])
     
@@ -291,6 +401,11 @@ async def steam_status(update: Update, context: CallbackContext):
 async def start(update: Update, context: CallbackContext):
     user = update.effective_user
     save_user(user.id, user.username or "нет_username", user.full_name or "Неизвестный")
+    
+    # Проверяем подписку
+    if not await check_subscription(update, context):
+        return
+    
     await show_main_menu_message(update.message, update.effective_user.id)
 
 async def show_main_menu_message(message, user_id):
@@ -309,7 +424,10 @@ async def show_main_menu_message(message, user_id):
         f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
         f"💰 Обычная роспись: {PRICE_STARS} ⭐️\n"
         f"🎮 Роспись в Steam: {STEAM_PRICE_STARS} ⭐️\n\n"
-        f"📢 Телеграм канал: https://t.me/Yatorokale\n\n"
+        f"📢 Наши каналы:\n"
+        f"• https://t.me/Yatorokale\n"
+        f"• https://t.me/Team_Spirit_Official\n\n"
+        f"🔥 Подпишись и получай эксклюзивные предложения!\n\n"
         f"Выбери вариант:",
         reply_markup=reply_markup
     )
@@ -330,7 +448,10 @@ async def show_main_menu(query, user_id):
         f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
         f"💰 Обычная роспись: {PRICE_STARS} ⭐️\n"
         f"🎮 Роспись в Steam: {STEAM_PRICE_STARS} ⭐️\n\n"
-        f"📢 Телеграм канал: https://t.me/Yatorokale\n\n"
+        f"📢 Наши каналы:\n"
+        f"• https://t.me/Yatorokale\n"
+        f"• https://t.me/Team_Spirit_Official\n\n"
+        f"🔥 Подпишись и получай эксклюзивные предложения!\n\n"
         f"Выбери вариант:",
         reply_markup=reply_markup
     )
@@ -341,6 +462,50 @@ async def button_handler(update: Update, context: CallbackContext):
     
     data = query.data
     user_id = update.effective_user.id
+    
+    # Проверка подписки
+    if data == "check_subscription":
+        await check_subscription_callback(update, context)
+        return
+    
+    # Для всех остальных действий проверяем подписку
+    if user_id != OWNER_ID:
+        # Проверяем подписку
+        not_subscribed = []
+        for channel in REQUIRED_CHANNELS:
+            try:
+                chat_member = await context.bot.get_chat_member(
+                    chat_id=channel['chat_id'],
+                    user_id=user_id
+                )
+                if chat_member.status not in ['member', 'administrator', 'creator']:
+                    not_subscribed.append(channel)
+            except:
+                not_subscribed.append(channel)
+        
+        if not_subscribed:
+            keyboard = []
+            for channel in not_subscribed:
+                keyboard.append([InlineKeyboardButton(
+                    f"📢 Подписаться на {channel['name']}",
+                    url=channel['url']
+                )])
+            keyboard.append([InlineKeyboardButton(
+                "✅ Я подписался! Проверить",
+                callback_data="check_subscription"
+            )])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
+            
+            await query.edit_message_text(
+                f"⚠️ **Для использования бота необходимо подписаться на каналы!**\n\n"
+                f"🔥 Подпишись на:\n{channels_text}\n\n"
+                f"После подписки нажми кнопку «✅ Я подписался! Проверить»",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            return
     
     if data == "show_history":
         if user_id != OWNER_ID:
@@ -376,7 +541,6 @@ async def button_handler(update: Update, context: CallbackContext):
     
     # === STEAM РОСПИСЬ ===
     if data == "buy_steam":
-        # Проверяем, есть ли уже заказ
         existing = next((o for o in steam_orders if o['user_id'] == user_id), None)
         if existing:
             if existing.get('paid', False):
@@ -393,7 +557,6 @@ async def button_handler(update: Update, context: CallbackContext):
                 )
             return
         
-        # Создаем заказ
         position = get_initial_position()
         order = {
             'user_id': user_id,
@@ -406,7 +569,6 @@ async def button_handler(update: Update, context: CallbackContext):
         steam_orders.append(order)
         save_steam_orders()
         
-        # Отправляем инвойс
         payload = f"steam_{user_id}_{GIFT_ID}"
         
         try:
@@ -555,7 +717,6 @@ async def cancel(update: Update, context: CallbackContext):
 async def pre_checkout(update: Update, context: CallbackContext):
     query = update.pre_checkout_query
     
-    # Проверяем для Steam
     if query.invoice_payload.startswith("steam_"):
         if query.total_amount == STEAM_PRICE_STARS:
             await query.answer(ok=True)
@@ -563,7 +724,6 @@ async def pre_checkout(update: Update, context: CallbackContext):
             await query.answer(ok=False, error_message="Неверная сумма.")
         return
     
-    # Проверяем для обычной росписи
     if query.invoice_payload.startswith("gift_"):
         if query.total_amount == PRICE_STARS:
             await query.answer(ok=True)
@@ -574,11 +734,9 @@ async def pre_checkout(update: Update, context: CallbackContext):
     await query.answer(ok=False, error_message="Что-то пошло не так.")
 
 async def handle_steam_link(update: Update, context: CallbackContext):
-    """Обрабатывает ссылку на Steam после оплаты"""
     user_id = update.effective_user.id
     steam_link = update.message.text.strip()
     
-    # Проверяем, есть ли оплаченный заказ
     order = next((o for o in steam_orders if o['user_id'] == user_id and o.get('paid', False)), None)
     
     if not order:
@@ -588,7 +746,6 @@ async def handle_steam_link(update: Update, context: CallbackContext):
         )
         return
     
-    # Сохраняем ссылку
     order['steam_link'] = steam_link
     save_steam_orders()
     
@@ -607,9 +764,7 @@ async def successful_payment(update: Update, context: CallbackContext):
     user = update.effective_user
     payload = update.message.successful_payment.invoice_payload
     
-    # === STEAM РОСПИСЬ ===
     if payload.startswith("steam_"):
-        # Находим заказ
         order = next((o for o in steam_orders if o['user_id'] == user_id), None)
         if not order:
             await update.message.reply_text(
@@ -617,11 +772,9 @@ async def successful_payment(update: Update, context: CallbackContext):
             )
             return
         
-        # Отмечаем как оплаченный
         order['paid'] = True
         save_steam_orders()
         
-        # Уведомление владельцу
         try:
             await context.bot.send_message(
                 chat_id=OWNER_ID,
@@ -633,7 +786,6 @@ async def successful_payment(update: Update, context: CallbackContext):
         except:
             pass
         
-        # Просим ссылку на Steam
         await update.message.reply_text(
             f"✅ **Оплата прошла успешно!**\n\n"
             f"🎮 Теперь отправьте ссылку на ваш профиль Steam:\n\n"
@@ -642,7 +794,6 @@ async def successful_payment(update: Update, context: CallbackContext):
         )
         return
     
-    # === ОБЫЧНАЯ РОСПИСЬ ===
     if payload.startswith("gift_"):
         signature = context.user_data.get('selected_signature', 'Без подписи')
         recipient_id = context.user_data.get('recipient_id', user_id)
@@ -687,7 +838,6 @@ async def successful_payment(update: Update, context: CallbackContext):
 def main():
     global steam_orders
     
-    # Загружаем заказы
     steam_orders = load_steam_orders()
     print(f"🎮 Загружено Steam заказов: {len(steam_orders)}")
     print(f"👥 Загружено пользователей: {len(users)}")
@@ -704,7 +854,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(button_handler, pattern="^back_to_menu$")],
     )
     
-    # Основные команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("steam", steam_status))
     application.add_handler(conv_handler)
@@ -713,7 +862,6 @@ def main():
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_steam_link))
     
-    # Команды владельца
     application.add_handler(CommandHandler("broadcast", broadcast))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("users", users_list))
@@ -721,7 +869,6 @@ def main():
     application.add_handler(CommandHandler("addusers", add_users_batch))
     application.add_handler(CommandHandler("test", test))
     
-    # Запускаем проверку очереди каждую минуту
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(check_steam_orders, interval=60, first=10)
