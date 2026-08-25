@@ -17,7 +17,7 @@ OWNER_ID = 8619742582
 PRICE_STARS = 20
 STEAM_PRICE_STARS = 350
 GIFT_COST = 15
-GIFT_ID = "5170233102089322756"
+GIFT_ID = "SIMPLE_BEAR_ID"
 
 # Каналы для подписки
 REQUIRED_CHANNELS = [
@@ -103,15 +103,12 @@ async def check_subscription(update: Update, context: CallbackContext) -> bool:
                 chat_id=channel['chat_id'],
                 user_id=user_id
             )
-            # Проверяем статус
             if chat_member.status not in ['member', 'administrator', 'creator']:
                 not_subscribed.append(channel)
         except Exception as e:
-            # Если не можем проверить - считаем что не подписан
             not_subscribed.append(channel)
     
     if not_subscribed:
-        # Создаем клавиатуру с кнопками для подписки
         keyboard = []
         for channel in not_subscribed:
             keyboard.append([InlineKeyboardButton(
@@ -119,15 +116,12 @@ async def check_subscription(update: Update, context: CallbackContext) -> bool:
                 url=channel['url']
             )])
         
-        # Кнопка проверки
         keyboard.append([InlineKeyboardButton(
             "✅ Я подписался! Проверить",
             callback_data="check_subscription"
         )])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Формируем текст
         channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
         
         await update.message.reply_text(
@@ -149,7 +143,6 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
     
     user_id = update.effective_user.id
     
-    # Владельца не проверяем
     if user_id == OWNER_ID:
         await query.edit_message_text("✅ Вы владелец, доступ открыт!")
         return
@@ -164,11 +157,11 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
             )
             if chat_member.status not in ['member', 'administrator', 'creator']:
                 not_subscribed.append(channel)
-        except:
+        except Exception as e:
+            print(f"Ошибка проверки {channel['name']}: {e}")
             not_subscribed.append(channel)
     
     if not_subscribed:
-        # Создаем клавиатуру с кнопками для подписки
         keyboard = []
         for channel in not_subscribed:
             keyboard.append([InlineKeyboardButton(
@@ -182,7 +175,6 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
         )])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
         channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
         
         await query.edit_message_text(
@@ -194,7 +186,6 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
         )
         return
     
-    # Все проверки пройдены
     await query.edit_message_text(
         "✅ **Спасибо за подписку!**\n\n"
         "🔥 Теперь вам доступны все функции бота!\n"
@@ -402,7 +393,6 @@ async def start(update: Update, context: CallbackContext):
     user = update.effective_user
     save_user(user.id, user.username or "нет_username", user.full_name or "Неизвестный")
     
-    # Проверяем подписку
     if not await check_subscription(update, context):
         return
     
@@ -463,14 +453,13 @@ async def button_handler(update: Update, context: CallbackContext):
     data = query.data
     user_id = update.effective_user.id
     
-    # Проверка подписки
+    # ===== ПРОВЕРКА ПОДПИСКИ (ДО ВСЕХ ОСТАЛЬНЫХ ДЕЙСТВИЙ) =====
     if data == "check_subscription":
         await check_subscription_callback(update, context)
         return
     
-    # Для всех остальных действий проверяем подписку
+    # ===== ДЛЯ ВСЕХ ОСТАЛЬНЫХ ДЕЙСТВИЙ ПРОВЕРЯЕМ ПОДПИСКУ =====
     if user_id != OWNER_ID:
-        # Проверяем подписку
         not_subscribed = []
         for channel in REQUIRED_CHANNELS:
             try:
@@ -507,6 +496,7 @@ async def button_handler(update: Update, context: CallbackContext):
             )
             return
     
+    # ===== ДАЛЬШЕ ВСЕ ОСТАЛЬНЫЕ ДЕЙСТВИЯ =====
     if data == "show_history":
         if user_id != OWNER_ID:
             await query.edit_message_text("❌ У вас нет доступа.")
