@@ -21,7 +21,6 @@ GIFT_ID = "SIMPLE_BEAR_ID"
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
-WAITING_FOR_STEAM_LINK = 2
 purchase_history = []
 steam_orders = []  # Список заказов на роспись в Steam
 users = []
@@ -221,24 +220,25 @@ async def check_steam_orders(context: CallbackContext):
     orders_to_remove = []
     
     for i, order in enumerate(steam_orders):
-        # Уменьшаем позицию на 1 каждую минуту
-        if order['position'] > 0:
+        # Уменьшаем позицию только у оплаченных заказов
+        if order.get('paid', False) and order['position'] > 0:
             order['position'] -= 1
         
-        # Проверяем, не прошло ли 24 часа
-        created_at = datetime.fromisoformat(order['created_at'])
-        if now - created_at >= timedelta(hours=24):
-            # Отправляем уведомление о доставке
-            try:
-                await context.bot.send_message(
-                    chat_id=order['user_id'],
-                    text="🎉 **РОСПИСЬ ДОСТАВЛЕНА!**\n\n"
-                         "✅ Ваша роспись в Steam от Yatoro готова!\n"
-                         "🔥 Поздравляем! Вы в числе избранных!"
-                )
-                orders_to_remove.append(i)
-            except:
-                pass
+        # Проверяем, не прошло ли 24 часа (только для оплаченных)
+        if order.get('paid', False):
+            created_at = datetime.fromisoformat(order['created_at'])
+            if now - created_at >= timedelta(hours=24):
+                # Отправляем уведомление о доставке
+                try:
+                    await context.bot.send_message(
+                        chat_id=order['user_id'],
+                        text="🎉 **РОСПИСЬ ДОСТАВЛЕНА!**\n\n"
+                             "✅ Ваша роспись в Steam от Yatoro готова!\n"
+                             "🔥 Поздравляем! Вы в числе избранных!"
+                    )
+                    orders_to_remove.append(i)
+                except:
+                    pass
     
     # Удаляем доставленные заказы (в обратном порядке)
     for i in sorted(orders_to_remove, reverse=True):
@@ -247,19 +247,30 @@ async def check_steam_orders(context: CallbackContext):
     save_steam_orders()
 
 async def steam_status(update: Update, context: CallbackContext):
-    """Показывает позицию в очереди (ТОЛЬКО ПОСЛЕ ОПЛАТЫ)"""
+    """Показывает статус заказа"""
     user_id = update.effective_user.id
     
-    # Ищем заказ пользователя ТОЛЬКО среди оплаченных
-    order = next((o for o in steam_orders if o['user_id'] == user_id and o.get('paid', False)), None)
+    # Ищем заказ пользователя
+    order = next((o for o in steam_orders if o['user_id'] == user_id), None)
     
     if not order:
         await update.message.reply_text(
-            "❌ У вас нет активных оплаченных заказов.\n\n"
-            "Чтобы заказать, нажмите кнопку **'Роспись в Steam от Yatoro'** в меню и оплатите."
+            "❌ У вас нет активных заказов.\n\n"
+            "Чтобы заказать, нажмите кнопку **'Роспись в Steam от Yatoro'** в меню."
         )
         return
     
+    # Если заказ не оплачен
+    if not order.get('paid', False):
+        await update.message.reply_text(
+            "⚠️ **У вас есть активный заказ, но он не оплачен!**\n\n"
+            "💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
+            "Оплатите заказ, чтобы начать обработку.\n"
+            "Используйте кнопку **'Роспись в Steam от Yatoro'** для оплаты."
+        )
+        return
+    
+    # Если заказ оплачен - показываем позицию
     position = order['position']
     created_at = datetime.fromisoformat(order['created_at'])
     
@@ -368,10 +379,18 @@ async def button_handler(update: Update, context: CallbackContext):
         # Проверяем, есть ли уже заказ
         existing = next((o for o in steam_orders if o['user_id'] == user_id), None)
         if existing:
-            await query.edit_message_text(
-                "❌ У вас уже есть активный заказ!\n\n"
-                "Используйте /steam для проверки статуса."
-            )
+            if existing.get('paid', False):
+                await query.edit_message_text(
+                    "❌ У вас уже есть оплаченный заказ!\n\n"
+                    f"Ваша позиция в очереди: {existing['position']}\n"
+                    "Используйте /steam для проверки статуса."
+                )
+            else:
+                await query.edit_message_text(
+                    "⚠️ У вас есть неоплаченный заказ!\n\n"
+                    f"💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
+                    "Оплатите его, чтобы начать обработку."
+                )
             return
         
         # Создаем заказ
@@ -381,7 +400,7 @@ async def button_handler(update: Update, context: CallbackContext):
             'position': position,
             'created_at': datetime.now().isoformat(),
             'profit': STEAM_PRICE_STARS - GIFT_COST,
-            'paid': False,  # Важно: не оплачен!
+            'paid': False,
             'steam_link': None
         }
         steam_orders.append(order)
@@ -394,7 +413,7 @@ async def button_handler(update: Update, context: CallbackContext):
             await context.bot.send_invoice(
                 chat_id=user_id,
                 title="🎮 Роспись в Steam от Yatoro",
-                description=f"Ваша позиция в очереди: {position}",
+                description="Оплатите заказ",
                 payload=payload,
                 provider_token="",
                 currency="XTR",
@@ -404,7 +423,6 @@ async def button_handler(update: Update, context: CallbackContext):
             
             await query.edit_message_text(
                 f"✅ **Вы выбрали роспись в Steam!**\n\n"
-                f"🎮 Ваша позиция в очереди: **{position}**\n\n"
                 f"💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
                 f"⬆️ Оплатите счёт выше.\n\n"
                 f"После оплаты укажите ссылку на ваш профиль Steam."
@@ -560,7 +578,7 @@ async def handle_steam_link(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     steam_link = update.message.text.strip()
     
-    # Проверяем, есть ли заказ
+    # Проверяем, есть ли оплаченный заказ
     order = next((o for o in steam_orders if o['user_id'] == user_id and o.get('paid', False)), None)
     
     if not order:
