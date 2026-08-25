@@ -78,6 +78,10 @@ async def broadcast(update: Update, context: CallbackContext):
         )
         return
     
+    if not users:
+        await update.message.reply_text("❌ Список пользователей пуст!")
+        return
+    
     status_msg = await update.message.reply_text(f"⏳ Рассылка {len(users)} пользователям...")
     
     success = 0
@@ -143,6 +147,105 @@ async def users_list(update: Update, context: CallbackContext):
     
     await update.message.reply_text(text, parse_mode='Markdown')
 
+async def import_users_file(update: Update, context: CallbackContext):
+    """Импортирует пользователей из файла users_old.txt (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    status_msg = await update.message.reply_text("⏳ Импорт пользователей из файла...")
+    
+    try:
+        imported = 0
+        already = 0
+        invalid = 0
+        
+        # Проверяем существование файла
+        try:
+            with open('users_old.txt', 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            await status_msg.edit_text(
+                "❌ **Файл users_old.txt не найден!**\n\n"
+                "Как создать файл:\n"
+                "1. Создай файл users_old.txt в папке с ботом\n"
+                "2. Вставь ID пользователей (по одному на строку)\n"
+                "3. Отправь на GitHub и сделай деплой\n"
+                "4. Запусти /import снова"
+            )
+            return
+        
+        if not lines:
+            await status_msg.edit_text("❌ Файл users_old.txt пуст!")
+            return
+        
+        # Обрабатываем каждую строку
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Проверяем, что это число
+            if not line.isdigit():
+                invalid += 1
+                continue
+            
+            user_id = int(line)
+            
+            # Проверяем, есть ли уже в списке
+            if user_id not in users:
+                users.append(user_id)
+                imported += 1
+            else:
+                already += 1
+        
+        # Сохраняем в основной файл
+        if imported > 0:
+            try:
+                with open('users.txt', 'a', encoding='utf-8') as f:
+                    for user_id in users[-imported:]:
+                        f.write(f"{user_id}|imported|imported|{datetime.now()}\n")
+            except Exception as e:
+                print(f"Ошибка сохранения: {e}")
+        
+        await status_msg.edit_text(
+            f"✅ **Импорт завершен!**\n\n"
+            f"📥 Всего строк в файле: {len(lines)}\n"
+            f"➕ Добавлено новых: {imported}\n"
+            f"⚠️ Уже были в списке: {already}\n"
+            f"❌ Неверных ID: {invalid}\n"
+            f"👥 Всего пользователей: {len(users)}\n\n"
+            f"Теперь используй /broadcast для рассылки!"
+        )
+        
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка: {e}")
+
+async def add_user(update: Update, context: CallbackContext):
+    """Добавляет одного пользователя по ID (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "✏️ Использование: /adduser ID\n"
+            "Пример: /adduser 123456789"
+        )
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        if user_id not in users:
+            users.append(user_id)
+            with open('users.txt', 'a', encoding='utf-8') as f:
+                f.write(f"{user_id}|manual|manual|{datetime.now()}\n")
+            await update.message.reply_text(f"✅ Пользователь {user_id} добавлен!\n👥 Всего: {len(users)}")
+        else:
+            await update.message.reply_text(f"⚠️ Пользователь {user_id} уже есть в списке.")
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом!")
+
 # ========== ОСНОВНОЙ КОД БОТА ==========
 
 async def start(update: Update, context: CallbackContext):
@@ -153,7 +256,8 @@ async def start(update: Update, context: CallbackContext):
 async def show_main_menu_message(message, user_id):
     keyboard = [
         [InlineKeyboardButton("🎁 Купить для себя", callback_data="buy_for_self")],
-        [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")]
+        [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")],
+        [InlineKeyboardButton("📢 Подписаться на новости", callback_data="subscribe")]
     ]
     
     if user_id == OWNER_ID:
@@ -171,7 +275,8 @@ async def show_main_menu_message(message, user_id):
 async def show_main_menu(query, user_id):
     keyboard = [
         [InlineKeyboardButton("🎁 Купить для себя", callback_data="buy_for_self")],
-        [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")]
+        [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")],
+        [InlineKeyboardButton("📢 Подписаться на новости", callback_data="subscribe")]
     ]
     
     if user_id == OWNER_ID:
@@ -192,6 +297,19 @@ async def button_handler(update: Update, context: CallbackContext):
     
     data = query.data
     user_id = update.effective_user.id
+    
+    if data == "subscribe":
+        if user_id not in users:
+            users.append(user_id)
+            try:
+                with open('users.txt', 'a', encoding='utf-8') as f:
+                    f.write(f"{user_id}|{update.effective_user.username or 'нет_username'}|{update.effective_user.full_name or 'Неизвестный'}|{datetime.now()}\n")
+            except:
+                pass
+            await query.edit_message_text("✅ Вы подписались на новости бота!")
+        else:
+            await query.edit_message_text("✅ Вы уже подписаны на новости!")
+        return
     
     if data == "show_history":
         if user_id != OWNER_ID:
@@ -508,6 +626,8 @@ def main():
     application.add_handler(CommandHandler("broadcast", broadcast))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("users", users_list))
+    application.add_handler(CommandHandler("import", import_users_file))
+    application.add_handler(CommandHandler("adduser", add_user))
     
     print("🤖 Бот запущен...")
     print(f"👤 Владелец: {OWNER_ID}")
