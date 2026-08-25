@@ -1,5 +1,4 @@
 import os
-import threading
 import logging
 from datetime import datetime
 from flask import Flask
@@ -29,7 +28,7 @@ SIGNATURES = [
 
 logging.basicConfig(level=logging.INFO)
 
-# ========== ТВОЙ КОД БОТА (без изменений) ==========
+# ========== ТВОЙ КОД БОТА ==========
 
 async def start(update: Update, context: CallbackContext):
     await show_main_menu_message(update.message, update.effective_user.id)
@@ -361,7 +360,7 @@ async def successful_payment(update: Update, context: CallbackContext):
 
 def main():
     """Основная функция запуска бота"""
-    app = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
         entry_points=[
@@ -378,11 +377,11 @@ def main():
         ],
     )
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
-    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     
     print("🤖 Бот запущен...")
     print(f"👤 Владелец: {OWNER_ID}")
@@ -391,12 +390,12 @@ def main():
     print(f"📝 Подписей: {len(SIGNATURES)}")
     print("=" * 50)
     
-    # Запускаем бота
-    app.run_polling()
+    # Запускаем бота (теперь без отдельного потока)
+    application.run_polling()
 
 # ========== НАСТРОЙКА ДЛЯ RENDER ==========
 
-# Создаем Flask приложение
+# Создаем Flask приложение для health check
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -407,16 +406,18 @@ def home():
 def health():
     return "OK"
 
-def run_bot():
-    """Запускает бота в отдельном потоке"""
-    main()
-
 if __name__ == "__main__":
-    # Запускаем бота в фоновом потоке
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True  # Поток завершится при остановке главного
-    bot_thread.start()
+    # Запускаем бота в ГЛАВНОМ потоке
+    # Запускаем Flask в отдельном потоке для health check
+    import threading
     
-    # Запускаем Flask сервер для Render
-    port = int(os.environ.get("PORT", 5000))
-    flask_app.run(host='0.0.0.0', port=port)
+    def run_flask():
+        port = int(os.environ.get("PORT", 5000))
+        flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    
+    # Запускаем Flask в фоновом потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Запускаем бота в главном потоке
+    main()
