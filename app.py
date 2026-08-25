@@ -11,13 +11,13 @@ from telegram.ext import Application, CommandHandler, PreCheckoutQueryHandler, M
 # ========== НАСТРОЙКИ ==========
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    raise ValueError("TELEGRAM_TOKEN не найден!")
+    TOKEN = "8994853122:AAGQkUeIxC-YN28w_haXSVEZVK2jFRZDgts"
 
 OWNER_ID = 8619742582
-PRICE_STARS = 20
-STEAM_PRICE_STARS = 350
+PRICE_STARS = 20  # Обычная роспись
+STEAM_PRICE_STARS = 350  # Роспись в Steam
 GIFT_COST = 15
-GIFT_ID = "5170233102089322756"
+GIFT_ID = "5170233102089322756"  # ID медведя
 
 # Каналы для подписки (НЕОБЯЗАТЕЛЬНО)
 REQUIRED_CHANNELS = [
@@ -88,14 +88,11 @@ def save_user(user_id, username, full_name):
 # ========== ПРОВЕРКА ПОДПИСКИ (НЕОБЯЗАТЕЛЬНАЯ) ==========
 
 async def check_subscription(update: Update, context: CallbackContext) -> bool:
-    """Проверяет подписку на каналы (НЕОБЯЗАТЕЛЬНО)"""
     user_id = update.effective_user.id
     
-    # Владельца пропускаем
     if user_id == OWNER_ID:
         return True
     
-    # Проверяем подписку
     not_subscribed = []
     for channel in REQUIRED_CHANNELS:
         try:
@@ -141,7 +138,6 @@ async def check_subscription(update: Update, context: CallbackContext) -> bool:
     return True
 
 async def check_subscription_callback(update: Update, context: CallbackContext):
-    """Проверяет подписку по нажатию кнопки"""
     query = update.callback_query
     await query.answer()
     
@@ -409,7 +405,6 @@ async def start(update: Update, context: CallbackContext):
     user = update.effective_user
     save_user(user.id, user.username or "нет_username", user.full_name or "Неизвестный")
     
-    # Проверка подписки (НЕОБЯЗАТЕЛЬНАЯ)
     if not await check_subscription(update, context):
         return
     
@@ -484,11 +479,10 @@ async def button_handler(update: Update, context: CallbackContext):
             )
         except:
             pass
-        # Показываем меню
         await show_main_menu(query, user_id)
         return
     
-    # ===== ДЛЯ ВСЕХ ОСТАЛЬНЫХ ДЕЙСТВИЙ ПРОВЕРЯЕМ ПОДПИСКУ (НО НЕ БЛОКИРУЕМ) =====
+    # ===== ИСТОРИЯ =====
     if data == "show_history":
         if user_id != OWNER_ID:
             await query.edit_message_text("❌ У вас нет доступа.")
@@ -502,8 +496,8 @@ async def button_handler(update: Update, context: CallbackContext):
         total_profit = 0
         for i, p in enumerate(purchase_history, 1):
             history_text += (
-                f"{i}. 👤 Покупатель: {p['buyer_name']} (ID: {p['buyer_id']})\n"
-                f"   🎁 Получатель: {p['recipient_name']} (ID: {p['recipient_id']})\n"
+                f"{i}. 👤 Покупатель: {p['buyer_name']} (@{p['buyer_username']})\n"
+                f"   🎁 Получатель: {p['recipient_name']} (@{p['recipient_username']})\n"
                 f"   📝 Подпись: {p['signature']}\n"
                 f"   ⭐️ {p['price']} звёзд\n"
                 f"   📊 Прибыль: {p['profit']} ⭐️\n"
@@ -575,7 +569,7 @@ async def button_handler(update: Update, context: CallbackContext):
             await query.edit_message_text(f"❌ Ошибка: {e}")
         return
     
-    # === ОБЫЧНАЯ РОСПИСЬ ===
+    # === ОБЫЧНАЯ РОСПИСЬ (из оригинального скрипта) ===
     if data == "buy_for_self":
         context.user_data['recipient_id'] = user_id
         context.user_data['recipient_name'] = update.effective_user.full_name or "Неизвестный"
@@ -746,6 +740,7 @@ async def successful_payment(update: Update, context: CallbackContext):
     user = update.effective_user
     payload = update.message.successful_payment.invoice_payload
     
+    # === STEAM РОСПИСЬ ===
     if payload.startswith("steam_"):
         order = next((o for o in steam_orders if o['user_id'] == user_id), None)
         if not order:
@@ -776,6 +771,7 @@ async def successful_payment(update: Update, context: CallbackContext):
         )
         return
     
+    # === ОБЫЧНАЯ РОСПИСЬ (из оригинального скрипта) ===
     if payload.startswith("gift_"):
         signature = context.user_data.get('selected_signature', 'Без подписи')
         recipient_id = context.user_data.get('recipient_id', user_id)
@@ -783,8 +779,9 @@ async def successful_payment(update: Update, context: CallbackContext):
         recipient_username = context.user_data.get('recipient_username', user.username or "нет_username")
         
         try:
+            # Отправляем подарок (медведя)
             await context.bot.send_gift(
-                user_id=recipient_id,
+                chat_id=recipient_id,
                 gift_id=GIFT_ID,
                 text=signature
             )
@@ -804,6 +801,25 @@ async def successful_payment(update: Update, context: CallbackContext):
             }
             purchase_history.append(purchase)
             
+            # Уведомление владельцу
+            try:
+                buyer_info = f"@{user.username}" if user.username else f"ID: {user_id}"
+                recipient_info = f"@{recipient_username}" if recipient_username != "нет_username" else f"ID: {recipient_id}"
+                
+                notification = (
+                    f"🎁 НОВАЯ ПОКУПКА!\n\n"
+                    f"👤 Покупатель: {user.full_name or 'Неизвестный'} ({buyer_info})\n"
+                    f"🎁 Получатель: {recipient_name} ({recipient_info})\n"
+                    f"📝 Подпись: {signature}\n"
+                    f"💰 Стоимость: {PRICE_STARS} ⭐️\n"
+                    f"📊 Прибыль: {profit} ⭐️\n"
+                    f"🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+                )
+                
+                await context.bot.send_message(chat_id=OWNER_ID, text=notification)
+            except Exception as e:
+                logging.error(f"Не удалось отправить уведомление: {e}")
+            
             await update.message.reply_text(
                 f"✅ **Роспись успешно отправлена!**\n\n"
                 f"🎁 Получатель: {recipient_name}\n"
@@ -812,7 +828,13 @@ async def successful_payment(update: Update, context: CallbackContext):
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {e}")
+            error = str(e)
+            logging.error(f"Ошибка при отправке подарка: {error}")
+            
+            if "STARGIFT_USAGE_LIMITED" in error:
+                await update.message.reply_text("❌ Этот подарок уже распродан.")
+            else:
+                await update.message.reply_text(f"❌ Ошибка: {error}")
         return
 
 # ========== ЗАПУСК БОТА ==========
@@ -858,7 +880,9 @@ def main():
     
     print("🤖 Бот запущен...")
     print(f"👤 Владелец: {OWNER_ID}")
+    print(f"⭐️ Обычная цена: {PRICE_STARS} ⭐️")
     print(f"🎮 Steam цена: {STEAM_PRICE_STARS} ⭐️")
+    print(f"🎁 ID подарка: {GIFT_ID}")
     print(f"👥 Пользователей: {len(users)}")
     print(f"🎮 Заказов в очереди: {len(steam_orders)}")
     print("=" * 50)
