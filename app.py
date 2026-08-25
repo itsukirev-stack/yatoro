@@ -33,7 +33,7 @@ users = [
     2004469073, 6682950414, 561123453, 5826934033, 716129320,
     5284725069, 7611609480, 985393449, 2076260534, 8365386325,
     5197774712, 8537366273, 1434031010, 5564666822, 1819861991,
-    6765046238, 7351012103
+    6765046238, 7351012103, 8684381518
 ]
 
 SIGNATURES = [
@@ -261,7 +261,6 @@ async def steam_status(update: Update, context: CallbackContext):
     
     position = order['position']
     created_at = datetime.fromisoformat(order['created_at'])
-    time_left = datetime.now() - created_at
     
     if position > 0:
         await update.message.reply_text(
@@ -407,7 +406,7 @@ async def button_handler(update: Update, context: CallbackContext):
                 f"🎮 Ваша позиция в очереди: **{position}**\n\n"
                 f"💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
                 f"⬆️ Оплатите счёт выше.\n\n"
-                f"После оплаты позиция будет уменьшаться каждую минуту.\n"
+                f"После оплаты вы получите уведомление о вашей позиции.\n"
                 f"Используйте /steam для проверки статуса."
             )
         except Exception as e:
@@ -576,9 +575,8 @@ async def successful_payment(update: Update, context: CallbackContext):
         await update.message.reply_text(
             f"✅ **Оплата прошла успешно!**\n\n"
             f"🎮 Ваша позиция в очереди: **{position}**\n\n"
-            f"⏳ Ожидайте {position} минут.\n"
-            f"Используйте /steam для проверки статуса.\n\n"
-            f"🔥 Ваша роспись будет доставлена автоматически!"
+            f"🔥 Ваша роспись будет доставлена автоматически!\n"
+            f"Используйте /steam для проверки статуса."
         )
         
         # Уведомление владельцу
