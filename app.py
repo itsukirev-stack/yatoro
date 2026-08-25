@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 from datetime import datetime
 from flask import Flask
@@ -14,11 +15,12 @@ if not TOKEN:
 OWNER_ID = 8619742582  # Твой ID
 PRICE_STARS = 20
 GIFT_COST = 15
-GIFT_ID = "5170233102089322756"  # ЗАМЕНИТЕ
+GIFT_ID = "SIMPLE_BEAR_ID"  # ЗАМЕНИТЕ
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
 purchase_history = []
+users = []  # Список ID пользователей для рассылки
 
 SIGNATURES = [
     "Короля не убить",
@@ -28,9 +30,124 @@ SIGNATURES = [
 
 logging.basicConfig(level=logging.INFO)
 
-# ========== ТВОЙ КОД БОТА ==========
+# ========== ЗАГРУЗКА ПОЛЬЗОВАТЕЛЕЙ ==========
+
+def load_users():
+    """Загружает пользователей из файла"""
+    try:
+        with open('users.txt', 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    user_id = int(line.split('|')[0])
+                    if user_id not in users:
+                        users.append(user_id)
+        print(f"👥 Загружено {len(users)} пользователей")
+    except FileNotFoundError:
+        print("📁 Файл users.txt не найден, создаю новый...")
+
+def save_user(user_id, username, full_name):
+    """Сохраняет нового пользователя"""
+    if user_id not in users:
+        users.append(user_id)
+        try:
+            with open('users.txt', 'a', encoding='utf-8') as f:
+                f.write(f"{user_id}|{username}|{full_name}|{datetime.now()}\n")
+        except Exception as e:
+            print(f"⚠️ Не удалось сохранить пользователя: {e}")
+        return True
+    return False
+
+# ========== КОМАНДЫ ДЛЯ ВЛАДЕЛЬЦА ==========
+
+async def broadcast(update: Update, context: CallbackContext):
+    """Рассылка всем пользователям (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    message_text = ' '.join(context.args)
+    if not message_text:
+        await update.message.reply_text(
+            "✏️ **Как использовать:**\n"
+            "`/broadcast Текст сообщения`\n\n"
+            "📌 Можно использовать Markdown:\n"
+            "`/broadcast *Жирный текст*`\n"
+            "`/broadcast _Курсив_`\n"
+            "`/broadcast [Ссылка](https://t.me/Yatorokale)`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    status_msg = await update.message.reply_text(f"⏳ Рассылка {len(users)} пользователям...")
+    
+    success = 0
+    fail = 0
+    
+    for user_id in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message_text,
+                parse_mode='Markdown'
+            )
+            success += 1
+        except Exception as e:
+            fail += 1
+            print(f"❌ Не удалось отправить {user_id}: {e}")
+        await asyncio.sleep(0.1)  # Защита от лимитов Telegram
+    
+    await status_msg.edit_text(
+        f"✅ **Рассылка завершена!**\n\n"
+        f"📤 Отправлено: {success}\n"
+        f"❌ Не доставлено: {fail}\n"
+        f"👥 Всего пользователей: {len(users)}"
+    )
+
+async def stats(update: Update, context: CallbackContext):
+    """Статистика бота (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    total_profit = sum(p['profit'] for p in purchase_history)
+    avg_profit = total_profit / len(purchase_history) if purchase_history else 0
+    
+    await update.message.reply_text(
+        f"📊 **Статистика бота**\n\n"
+        f"👥 Пользователей: {len(users)}\n"
+        f"🎁 Продано подарков: {len(purchase_history)}\n"
+        f"⭐️ Общая прибыль: {total_profit} ⭐️\n"
+        f"💰 Средняя прибыль: {avg_profit:.1f} ⭐️\n"
+        f"📈 Всего продаж: {len(purchase_history)}"
+    )
+
+async def users_list(update: Update, context: CallbackContext):
+    """Список всех пользователей (только для владельца)"""
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа.")
+        return
+    
+    if not users:
+        await update.message.reply_text("📭 Список пользователей пуст.")
+        return
+    
+    # Показываем первых 20 пользователей
+    text = "👥 **Список пользователей:**\n\n"
+    for i, user_id in enumerate(users[:20], 1):
+        text += f"{i}. ID: `{user_id}`\n"
+    
+    if len(users) > 20:
+        text += f"\n... и еще {len(users) - 20} пользователей"
+    
+    text += f"\n\n📊 Всего: {len(users)} пользователей"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+# ========== ОСНОВНОЙ КОД БОТА ==========
 
 async def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    save_user(user.id, user.username or "нет_username", user.full_name or "Неизвестный")
     await show_main_menu_message(update.message, update.effective_user.id)
 
 async def show_main_menu_message(message, user_id):
@@ -360,6 +477,9 @@ async def successful_payment(update: Update, context: CallbackContext):
 
 def main():
     """Основная функция запуска бота"""
+    # Загружаем пользователей
+    load_users()
+    
     application = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
@@ -377,20 +497,27 @@ def main():
         ],
     )
     
+    # Основные команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     
+    # Команды для владельца
+    application.add_handler(CommandHandler("broadcast", broadcast))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("users", users_list))
+    
     print("🤖 Бот запущен...")
     print(f"👤 Владелец: {OWNER_ID}")
     print(f"⭐️ Цена: {PRICE_STARS} звёзд")
     print(f"🎁 ID подарка: {GIFT_ID}")
     print(f"📝 Подписей: {len(SIGNATURES)}")
+    print(f"👥 Пользователей: {len(users)}")
     print("=" * 50)
     
-    # Запускаем бота (теперь без отдельного потока)
+    # Запускаем бота
     application.run_polling()
 
 # ========== НАСТРОЙКА ДЛЯ RENDER ==========
