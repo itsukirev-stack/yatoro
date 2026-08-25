@@ -3,6 +3,7 @@ import asyncio
 import logging
 import json
 import random
+import aiohttp
 from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
@@ -14,7 +15,7 @@ OWNER_ID = 8619742582
 PRICE_STARS = 20
 STEAM_PRICE_STARS = 350
 GIFT_COST = 15
-GIFT_ID = "5170233102089322756"  # ЗАМЕНИТЕ НА ПРАВИЛЬНЫЙ ID МЕДВЕДЯ
+GIFT_ID = "SIMPLE_BEAR_ID"  # ЗАМЕНИТЕ НА ПРАВИЛЬНЫЙ ID МЕДВЕДЯ
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
@@ -472,30 +473,19 @@ async def successful_payment(update: Update, context: CallbackContext):
         recipient_username = context.user_data.get('recipient_username', user.username or "нет_username")
         
         try:
-            # ПРОБУЕМ ОТПРАВИТЬ МЕДВЕДЯ
-            try:
-                # Способ 1: правильный параметр для новой версии
-                await context.bot.send_gift(
-                    chat_id=recipient_id,
-                    gift_id=GIFT_ID,
-                    text=signature
-                )
-            except TypeError:
-                # Способ 2: для старой версии
-                await context.bot.send_gift(
-                    user_id=recipient_id,
-                    gift_id=GIFT_ID,
-                    text=signature
-                )
-            except AttributeError:
-                # Способ 3: через прямого бота
-                from telegram import Bot
-                bot = Bot(token=TOKEN)
-                await bot.send_gift(
-                    chat_id=recipient_id,
-                    gift_id=GIFT_ID,
-                    text=signature
-                )
+            # ОТПРАВКА МЕДВЕДЯ ЧЕРЕЗ ПРЯМОЙ ЗАПРОС К API TELEGRAM
+            url = f"https://api.telegram.org/bot{TOKEN}/sendGift"
+            data = {
+                "user_id": recipient_id,
+                "gift_id": GIFT_ID,
+                "text": signature
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+                    if not result.get('ok'):
+                        raise Exception(result.get('description', 'Неизвестная ошибка'))
             
             profit = PRICE_STARS - GIFT_COST
             purchase = {
@@ -543,7 +533,7 @@ async def successful_payment(update: Update, context: CallbackContext):
             if "STARGIFT_USAGE_LIMITED" in error:
                 await update.message.reply_text("❌ Этот подарок уже распродан.")
             else:
-                await update.message.reply_text(f"❌ Ошибка: {e}")
+                await update.message.reply_text(f"❌ Ошибка: {error}")
         return
 
 def main():
