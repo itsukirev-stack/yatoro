@@ -472,12 +472,30 @@ async def successful_payment(update: Update, context: CallbackContext):
         recipient_username = context.user_data.get('recipient_username', user.username or "нет_username")
         
         try:
-            # Отправляем подарок (медведя) с подписью
-            await context.bot.send_gift(
-                user_id=recipient_id,
-                gift_id=GIFT_ID,
-                text=signature
-            )
+            # ПРОБУЕМ ОТПРАВИТЬ МЕДВЕДЯ
+            try:
+                # Способ 1: правильный параметр для новой версии
+                await context.bot.send_gift(
+                    chat_id=recipient_id,
+                    gift_id=GIFT_ID,
+                    text=signature
+                )
+            except TypeError:
+                # Способ 2: для старой версии
+                await context.bot.send_gift(
+                    user_id=recipient_id,
+                    gift_id=GIFT_ID,
+                    text=signature
+                )
+            except AttributeError:
+                # Способ 3: через прямого бота
+                from telegram import Bot
+                bot = Bot(token=TOKEN)
+                await bot.send_gift(
+                    chat_id=recipient_id,
+                    gift_id=GIFT_ID,
+                    text=signature
+                )
             
             profit = PRICE_STARS - GIFT_COST
             purchase = {
