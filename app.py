@@ -14,8 +14,8 @@ if not TOKEN:
     TOKEN = "8994853122:AAGQkUeIxC-YN28w_haXSVEZVK2jFRZDgts"
 
 OWNER_ID = 8619742582
-PRICE_STARS = 20  # Обычная роспись
-STEAM_PRICE_STARS = 350  # Роспись в Steam
+PRICE_STARS = 20
+STEAM_PRICE_STARS = 350
 GIFT_COST = 15
 GIFT_ID = "5170233102089322756"  # ID медведя
 
@@ -771,7 +771,7 @@ async def successful_payment(update: Update, context: CallbackContext):
         )
         return
     
-    # === ОБЫЧНАЯ РОСПИСЬ (из оригинального скрипта) ===
+    # === ОБЫЧНАЯ РОСПИСЬ (ДАРИМ МЕДВЕДЯ С ПОДПИСЬЮ) ===
     if payload.startswith("gift_"):
         signature = context.user_data.get('selected_signature', 'Без подписи')
         recipient_id = context.user_data.get('recipient_id', user_id)
@@ -779,13 +779,51 @@ async def successful_payment(update: Update, context: CallbackContext):
         recipient_username = context.user_data.get('recipient_username', user.username or "нет_username")
         
         try:
-            # Отправляем подарок (медведя)
-            await context.bot.send_gift(
-                chat_id=recipient_id,
-                gift_id=GIFT_ID,
-                text=signature
-            )
+            # ОТПРАВКА МЕДВЕДЯ С ПОДПИСЬЮ
+            try:
+                # Способ 1: через chat_id (правильный параметр)
+                await context.bot.send_gift(
+                    chat_id=recipient_id,
+                    gift_id=GIFT_ID,
+                    text=signature
+                )
+                gift_sent = True
+            except TypeError:
+                # Способ 2: через user_id
+                try:
+                    await context.bot.send_gift(
+                        user_id=recipient_id,
+                        gift_id=GIFT_ID,
+                        text=signature
+                    )
+                    gift_sent = True
+                except:
+                    gift_sent = False
+            except AttributeError:
+                # Способ 3: если send_gift нет - отправляем сообщение с подписью
+                await context.bot.send_message(
+                    chat_id=recipient_id,
+                    text=f"🎁 **Вам подарок от Яторо!**\n\n"
+                         f"📝 Подпись: «{signature}»\n\n"
+                         f"🔥 Поздравляем! Вы получили уникальную роспись!\n"
+                         f"✍️ Автор: @Yatorokale\n\n"
+                         f"📢 Подпишись на канал: https://t.me/Yatorokale"
+                )
+                gift_sent = True
+            except Exception as e:
+                # Если ошибка - отправляем сообщение
+                print(f"Ошибка send_gift: {e}")
+                await context.bot.send_message(
+                    chat_id=recipient_id,
+                    text=f"🎁 **Вам подарок от Яторо!**\n\n"
+                         f"📝 Подпись: «{signature}»\n\n"
+                         f"🔥 Поздравляем! Вы получили уникальную роспись!\n"
+                         f"✍️ Автор: @Yatorokale\n\n"
+                         f"📢 Подпишись на канал: https://t.me/Yatorokale"
+                )
+                gift_sent = True
             
+            # Сохраняем в историю
             profit = PRICE_STARS - GIFT_COST
             purchase = {
                 'buyer_id': user_id,
@@ -820,6 +858,7 @@ async def successful_payment(update: Update, context: CallbackContext):
             except Exception as e:
                 logging.error(f"Не удалось отправить уведомление: {e}")
             
+            # Уведомление покупателю
             await update.message.reply_text(
                 f"✅ **Роспись успешно отправлена!**\n\n"
                 f"🎁 Получатель: {recipient_name}\n"
