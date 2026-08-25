@@ -1,27 +1,31 @@
 import os
 import asyncio
 import logging
-from datetime import datetime
+import json
+import random
+from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, PreCheckoutQueryHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext, ConversationHandler
 
 # ========== НАСТРОЙКИ ==========
-# Берем токен из переменных окружения (безопасно!)
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    raise ValueError("TELEGRAM_TOKEN не найден! Добавь его в переменные окружения.")
+    raise ValueError("TELEGRAM_TOKEN не найден!")
 
-OWNER_ID = 8619742582  # Твой ID
-PRICE_STARS = 20
+OWNER_ID = 8619742582
+PRICE_STARS = 20  # Цена за обычную роспись
+STEAM_PRICE_STARS = 350  # Цена за роспись в Steam
 GIFT_COST = 15
-GIFT_ID = "SIMPLE_BEAR_ID"  # ЗАМЕНИТЕ
+GIFT_ID = "SIMPLE_BEAR_ID"
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
 purchase_history = []
+steam_orders = []  # Список заказов на роспись в Steam
+users = []
 
-# ========== ПОЛЬЗОВАТЕЛИ (ЖЕСТКИЙ СПИСОК) ==========
+# ========== ПОЛЬЗОВАТЕЛИ ==========
 users = [
     1063566670, 1706296392, 6086019488, 818549482, 8179993565,
     5291915479, 1997847677, 5053531607, 7613664425, 1551895486,
@@ -32,20 +36,6 @@ users = [
     6765046238, 7351012103
 ]
 
-# Сохраняем в файл при запуске
-def save_users_to_file():
-    try:
-        with open('users.txt', 'w', encoding='utf-8') as f:
-            for user_id in users:
-                f.write(f"{user_id}|imported|imported|{datetime.now()}\n")
-        print(f"✅ Сохранено {len(users)} пользователей в users.txt")
-    except Exception as e:
-        print(f"❌ Ошибка сохранения: {e}")
-
-save_users_to_file()
-print(f"👥 Загружено {len(users)} пользователей")
-# ==================================================
-
 SIGNATURES = [
     "Короля не убить",
     "3/2",
@@ -54,37 +44,46 @@ SIGNATURES = [
 
 logging.basicConfig(level=logging.INFO)
 
-# ========== ЗАГРУЗКА ПОЛЬЗОВАТЕЛЕЙ ИЗ ФАЙЛА ==========
+# ========== РАБОТА С ФАЙЛАМИ ==========
 
-def load_users_from_file():
-    """Загружает пользователей из файла (если есть)"""
+def save_users():
     try:
-        with open('users.txt', 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    user_id = int(line.split('|')[0])
-                    if user_id not in users:
-                        users.append(user_id)
-        print(f"👥 Загружено {len(users)} пользователей из файла")
-    except FileNotFoundError:
-        print("📁 Файл users.txt не найден")
+        with open('users.txt', 'w', encoding='utf-8') as f:
+            for user_id in users:
+                f.write(f"{user_id}|imported|imported|{datetime.now()}\n")
+    except:
+        pass
+
+def save_steam_orders():
+    """Сохраняет заказы в файл"""
+    try:
+        with open('steam_orders.json', 'w', encoding='utf-8') as f:
+            json.dump(steam_orders, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Ошибка сохранения заказов: {e}")
+
+def load_steam_orders():
+    """Загружает заказы из файла"""
+    try:
+        with open('steam_orders.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return []
 
 def save_user(user_id, username, full_name):
-    """Сохраняет нового пользователя"""
     if user_id not in users:
         users.append(user_id)
         try:
             with open('users.txt', 'a', encoding='utf-8') as f:
                 f.write(f"{user_id}|{username}|{full_name}|{datetime.now()}\n")
-        except Exception as e:
-            print(f"⚠️ Не удалось сохранить пользователя: {e}")
+        except:
+            pass
         return True
     return False
 
 # ========== КОМАНДЫ ДЛЯ ВЛАДЕЛЬЦА ==========
 
 async def broadcast(update: Update, context: CallbackContext):
-    """Рассылка всем пользователям (только для владельца)"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ У вас нет доступа.")
         return
@@ -92,12 +91,7 @@ async def broadcast(update: Update, context: CallbackContext):
     message_text = ' '.join(context.args)
     if not message_text:
         await update.message.reply_text(
-            "✏️ **Как использовать:**\n"
-            "`/broadcast Текст сообщения`\n\n"
-            "📌 Можно использовать Markdown:\n"
-            "`/broadcast *Жирный текст*`\n"
-            "`/broadcast _Курсив_`\n"
-            "`/broadcast [Ссылка](https://t.me/Yatorokale)`",
+            "✏️ Использование: /broadcast Текст сообщения",
             parse_mode='Markdown'
         )
         return
@@ -113,16 +107,11 @@ async def broadcast(update: Update, context: CallbackContext):
     
     for user_id in users:
         try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=message_text,
-                parse_mode='Markdown'
-            )
+            await context.bot.send_message(chat_id=user_id, text=message_text, parse_mode='Markdown')
             success += 1
-        except Exception as e:
+        except:
             fail += 1
-            print(f"❌ Не удалось отправить {user_id}: {e}")
-        await asyncio.sleep(0.1)  # Защита от лимитов Telegram
+        await asyncio.sleep(0.1)
     
     await status_msg.edit_text(
         f"✅ **Рассылка завершена!**\n\n"
@@ -132,25 +121,23 @@ async def broadcast(update: Update, context: CallbackContext):
     )
 
 async def stats(update: Update, context: CallbackContext):
-    """Статистика бота (только для владельца)"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ У вас нет доступа.")
         return
     
     total_profit = sum(p['profit'] for p in purchase_history)
-    avg_profit = total_profit / len(purchase_history) if purchase_history else 0
+    steam_profit = sum(o.get('profit', 0) for o in steam_orders)
     
     await update.message.reply_text(
         f"📊 **Статистика бота**\n\n"
         f"👥 Пользователей: {len(users)}\n"
-        f"🎁 Продано подарков: {len(purchase_history)}\n"
-        f"⭐️ Общая прибыль: {total_profit} ⭐️\n"
-        f"💰 Средняя прибыль: {avg_profit:.1f} ⭐️\n"
-        f"📈 Всего продаж: {len(purchase_history)}"
+        f"🎁 Обычных росписей: {len(purchase_history)}\n"
+        f"🎮 Steam росписей: {len(steam_orders)}\n"
+        f"⭐️ Общая прибыль: {total_profit + steam_profit} ⭐️\n"
+        f"💰 Steam заказов в очереди: {len(steam_orders)}"
     )
 
 async def users_list(update: Update, context: CallbackContext):
-    """Список всех пользователей (только для владельца)"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ У вас нет доступа.")
         return
@@ -159,7 +146,6 @@ async def users_list(update: Update, context: CallbackContext):
         await update.message.reply_text("📭 Список пользователей пуст.")
         return
     
-    # Показываем первых 20 пользователей
     text = "👥 **Список пользователей:**\n\n"
     for i, user_id in enumerate(users[:20], 1):
         text += f"{i}. ID: `{user_id}`\n"
@@ -168,168 +154,127 @@ async def users_list(update: Update, context: CallbackContext):
         text += f"\n... и еще {len(users) - 20} пользователей"
     
     text += f"\n\n📊 Всего: {len(users)} пользователей"
-    
     await update.message.reply_text(text, parse_mode='Markdown')
 
-async def import_users_file(update: Update, context: CallbackContext):
-    """Импортирует пользователей из файла users_old.txt (только для владельца)"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ У вас нет доступа.")
-        return
-    
-    status_msg = await update.message.reply_text("⏳ Импорт пользователей из файла...")
-    
-    try:
-        imported = 0
-        already = 0
-        invalid = 0
-        
-        # Проверяем существование файла
-        try:
-            with open('users_old.txt', 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-        except FileNotFoundError:
-            await status_msg.edit_text(
-                "❌ **Файл users_old.txt не найден!**\n\n"
-                "Как создать файл:\n"
-                "1. Создай файл users_old.txt в папке с ботом\n"
-                "2. Вставь ID пользователей (по одному на строку)\n"
-                "3. Отправь на GitHub и сделай деплой\n"
-                "4. Запусти /import снова"
-            )
-            return
-        
-        if not lines:
-            await status_msg.edit_text("❌ Файл users_old.txt пуст!")
-            return
-        
-        # Обрабатываем каждую строку
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Проверяем, что это число
-            if not line.isdigit():
-                invalid += 1
-                continue
-            
-            user_id = int(line)
-            
-            # Проверяем, есть ли уже в списке
-            if user_id not in users:
-                users.append(user_id)
-                imported += 1
-            else:
-                already += 1
-        
-        # Сохраняем в основной файл
-        if imported > 0:
-            try:
-                with open('users.txt', 'a', encoding='utf-8') as f:
-                    for user_id in users[-imported:]:
-                        f.write(f"{user_id}|imported|imported|{datetime.now()}\n")
-            except Exception as e:
-                print(f"Ошибка сохранения: {e}")
-        
-        await status_msg.edit_text(
-            f"✅ **Импорт завершен!**\n\n"
-            f"📥 Всего строк в файле: {len(lines)}\n"
-            f"➕ Добавлено новых: {imported}\n"
-            f"⚠️ Уже были в списке: {already}\n"
-            f"❌ Неверных ID: {invalid}\n"
-            f"👥 Всего пользователей: {len(users)}\n\n"
-            f"Теперь используй /broadcast для рассылки!"
-        )
-        
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Ошибка: {e}")
-
 async def add_user(update: Update, context: CallbackContext):
-    """Добавляет одного пользователя по ID (только для владельца)"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ У вас нет доступа.")
         return
     
     if not context.args:
-        await update.message.reply_text(
-            "✏️ Использование: /adduser ID\n"
-            "Пример: /adduser 123456789"
-        )
+        await update.message.reply_text("✏️ Использование: /adduser ID")
         return
     
     try:
         user_id = int(context.args[0])
         if user_id not in users:
             users.append(user_id)
-            with open('users.txt', 'a', encoding='utf-8') as f:
-                f.write(f"{user_id}|manual|manual|{datetime.now()}\n")
-            await update.message.reply_text(f"✅ Пользователь {user_id} добавлен!\n👥 Всего: {len(users)}")
+            save_users()
+            await update.message.reply_text(f"✅ Пользователь {user_id} добавлен!")
         else:
             await update.message.reply_text(f"⚠️ Пользователь {user_id} уже есть в списке.")
     except ValueError:
         await update.message.reply_text("❌ ID должен быть числом!")
 
 async def add_users_batch(update: Update, context: CallbackContext):
-    """Добавляет нескольких пользователей через пробел (только для владельца)"""
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("❌ У вас нет доступа.")
         return
     
     if not context.args:
-        await update.message.reply_text(
-            "✏️ Использование: /addusers ID1 ID2 ID3 ...\n"
-            "Пример: /addusers 123456789 987654321 555555555"
-        )
+        await update.message.reply_text("✏️ Использование: /addusers ID1 ID2 ID3 ...")
         return
     
     added = 0
-    already = 0
-    invalid = 0
-    
     for arg in context.args:
         try:
             user_id = int(arg)
             if user_id not in users:
                 users.append(user_id)
                 added += 1
-            else:
-                already += 1
-        except ValueError:
-            invalid += 1
+        except:
+            pass
     
-    # Сохраняем в файл
     if added > 0:
-        try:
-            with open('users.txt', 'a', encoding='utf-8') as f:
-                for user_id in users[-added:]:
-                    f.write(f"{user_id}|manual|manual|{datetime.now()}\n")
-        except Exception as e:
-            print(f"Ошибка сохранения: {e}")
+        save_users()
     
-    await update.message.reply_text(
-        f"✅ **Добавлено пользователей:**\n\n"
-        f"➕ Добавлено: {added}\n"
-        f"⚠️ Уже были: {already}\n"
-        f"❌ Неверных ID: {invalid}\n"
-        f"👥 Всего: {len(users)}"
-    )
+    await update.message.reply_text(f"✅ Добавлено {added} пользователей!\n👥 Всего: {len(users)}")
 
 async def test(update: Update, context: CallbackContext):
-    """Тестовая команда"""
     await update.message.reply_text(f"✅ Бот работает! Твой ID: {update.effective_user.id}")
 
-async def reset_webhook(update: Update, context: CallbackContext):
-    """Сбрасывает webhook (только для владельца)"""
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ У вас нет доступа.")
+# ========== СИСТЕМА ОЧЕРЕДИ ДЛЯ STEAM ==========
+
+def get_initial_position():
+    """Возвращает случайную позицию от 400 до 500"""
+    return random.randint(400, 500)
+
+async def check_steam_orders(context: CallbackContext):
+    """Проверяет заказы каждую минуту и уменьшает позицию"""
+    global steam_orders
+    
+    if not steam_orders:
         return
     
-    try:
-        await context.bot.delete_webhook()
-        await update.message.reply_text("✅ Webhook удален! Бот перезапущен с polling.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
+    now = datetime.now()
+    orders_to_remove = []
+    
+    for i, order in enumerate(steam_orders):
+        # Уменьшаем позицию на 1 каждую минуту
+        if order['position'] > 0:
+            order['position'] -= 1
+        
+        # Проверяем, не прошло ли 24 часа
+        created_at = datetime.fromisoformat(order['created_at'])
+        if now - created_at >= timedelta(hours=24):
+            # Отправляем уведомление о доставке
+            try:
+                await context.bot.send_message(
+                    chat_id=order['user_id'],
+                    text="🎉 **РОСПИСЬ ДОСТАВЛЕНА!**\n\n"
+                         "✅ Ваша роспись в Steam от Yatoro готова!\n"
+                         "🔥 Поздравляем! Вы в числе избранных!"
+                )
+                orders_to_remove.append(i)
+            except:
+                pass
+    
+    # Удаляем доставленные заказы (в обратном порядке)
+    for i in sorted(orders_to_remove, reverse=True):
+        steam_orders.pop(i)
+    
+    save_steam_orders()
+
+async def steam_status(update: Update, context: CallbackContext):
+    """Показывает позицию в очереди"""
+    user_id = update.effective_user.id
+    
+    # Ищем заказ пользователя
+    order = next((o for o in steam_orders if o['user_id'] == user_id), None)
+    
+    if not order:
+        await update.message.reply_text(
+            "❌ У вас нет активных заказов на роспись в Steam.\n\n"
+            "Чтобы заказать, нажмите кнопку **'Роспись в Steam от Yatoro'** в меню."
+        )
+        return
+    
+    position = order['position']
+    created_at = datetime.fromisoformat(order['created_at'])
+    time_left = datetime.now() - created_at
+    
+    if position > 0:
+        await update.message.reply_text(
+            f"🎮 **Ваша позиция в очереди: {position}**\n\n"
+            f"⏳ Осталось примерно: {position} минут\n"
+            f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"🔥 Ожидайте! Ваша роспись скоро будет готова!"
+        )
+    else:
+        await update.message.reply_text(
+            "🎉 **ВАША РОСПИСЬ ГОТОВА!**\n\n"
+            "✅ Ожидайте уведомление о доставке!"
+        )
 
 # ========== ОСНОВНОЙ КОД БОТА ==========
 
@@ -342,7 +287,7 @@ async def show_main_menu_message(message, user_id):
     keyboard = [
         [InlineKeyboardButton("🎁 Купить для себя", callback_data="buy_for_self")],
         [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")],
-        [InlineKeyboardButton("📢 Подписаться на новости", callback_data="subscribe")]
+        [InlineKeyboardButton("🎮 Роспись в Steam от Yatoro", callback_data="buy_steam")]
     ]
     
     if user_id == OWNER_ID:
@@ -351,7 +296,9 @@ async def show_main_menu_message(message, user_id):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await message.reply_text(
-        f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️ всего за {PRICE_STARS} ⭐️!\n\n"
+        f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
+        f"💰 Обычная роспись: {PRICE_STARS} ⭐️\n"
+        f"🎮 Роспись в Steam: {STEAM_PRICE_STARS} ⭐️\n\n"
         f"📢 Телеграм канал: https://t.me/Yatorokale\n\n"
         f"Выбери вариант:",
         reply_markup=reply_markup
@@ -361,7 +308,7 @@ async def show_main_menu(query, user_id):
     keyboard = [
         [InlineKeyboardButton("🎁 Купить для себя", callback_data="buy_for_self")],
         [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")],
-        [InlineKeyboardButton("📢 Подписаться на новости", callback_data="subscribe")]
+        [InlineKeyboardButton("🎮 Роспись в Steam от Yatoro", callback_data="buy_steam")]
     ]
     
     if user_id == OWNER_ID:
@@ -370,7 +317,9 @@ async def show_main_menu(query, user_id):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️ всего за {PRICE_STARS} ⭐️!\n\n"
+        f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
+        f"💰 Обычная роспись: {PRICE_STARS} ⭐️\n"
+        f"🎮 Роспись в Steam: {STEAM_PRICE_STARS} ⭐️\n\n"
         f"📢 Телеграм канал: https://t.me/Yatorokale\n\n"
         f"Выбери вариант:",
         reply_markup=reply_markup
@@ -382,19 +331,6 @@ async def button_handler(update: Update, context: CallbackContext):
     
     data = query.data
     user_id = update.effective_user.id
-    
-    if data == "subscribe":
-        if user_id not in users:
-            users.append(user_id)
-            try:
-                with open('users.txt', 'a', encoding='utf-8') as f:
-                    f.write(f"{user_id}|{update.effective_user.username or 'нет_username'}|{update.effective_user.full_name or 'Неизвестный'}|{datetime.now()}\n")
-            except:
-                pass
-            await query.edit_message_text("✅ Вы подписались на новости бота!")
-        else:
-            await query.edit_message_text("✅ Вы уже подписаны на новости!")
-        return
     
     if data == "show_history":
         if user_id != OWNER_ID:
@@ -428,6 +364,57 @@ async def button_handler(update: Update, context: CallbackContext):
         await show_main_menu(query, user_id)
         return
     
+    # === STEAM РОСПИСЬ ===
+    if data == "buy_steam":
+        # Проверяем, есть ли уже заказ
+        existing = next((o for o in steam_orders if o['user_id'] == user_id), None)
+        if existing:
+            await query.edit_message_text(
+                "❌ У вас уже есть активный заказ!\n\n"
+                f"Ваша позиция в очереди: {existing['position']}\n"
+                f"Используйте /steam для проверки статуса."
+            )
+            return
+        
+        # Создаем заказ
+        position = get_initial_position()
+        order = {
+            'user_id': user_id,
+            'position': position,
+            'created_at': datetime.now().isoformat(),
+            'profit': STEAM_PRICE_STARS - GIFT_COST
+        }
+        steam_orders.append(order)
+        save_steam_orders()
+        
+        # Отправляем инвойс
+        payload = f"steam_{user_id}_{GIFT_ID}"
+        
+        try:
+            await context.bot.send_invoice(
+                chat_id=user_id,
+                title="🎮 Роспись в Steam от Yatoro",
+                description=f"Ваша позиция в очереди: {position}",
+                payload=payload,
+                provider_token="",
+                currency="XTR",
+                prices=[LabeledPrice(label="Роспись в Steam", amount=STEAM_PRICE_STARS)],
+                start_parameter="steam_purchase"
+            )
+            
+            await query.edit_message_text(
+                f"✅ **Вы выбрали роспись в Steam!**\n\n"
+                f"🎮 Ваша позиция в очереди: **{position}**\n\n"
+                f"💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
+                f"⬆️ Оплатите счёт выше.\n\n"
+                f"После оплаты позиция будет уменьшаться каждую минуту.\n"
+                f"Используйте /steam для проверки статуса."
+            )
+        except Exception as e:
+            await query.edit_message_text(f"❌ Ошибка: {e}")
+        return
+    
+    # === ОБЫЧНАЯ РОСПИСЬ ===
     if data == "buy_for_self":
         context.user_data['recipient_id'] = user_id
         context.user_data['recipient_name'] = update.effective_user.full_name or "Неизвестный"
@@ -438,13 +425,8 @@ async def button_handler(update: Update, context: CallbackContext):
     if data == "buy_for_other":
         await query.edit_message_text(
             "✏️ Введите **ID** пользователя, которому хотите подарить:\n\n"
-            "Как узнать ID:\n"
-            "1️⃣ Попросите пользователя написать боту: /start\n"
-            "2️⃣ Бот пришлет его ID\n"
-            "3️⃣ Или используйте бота @userinfobot\n\n"
             "📌 Пример: `8619742582`\n\n"
-            "⬇️ Напишите ID в чат и отправьте.\n\n"
-            "Или нажмите /cancel для отмены.",
+            "⬇️ Напишите ID в чат и отправьте.",
             parse_mode='Markdown'
         )
         return WAITING_FOR_RECIPIENT
@@ -479,7 +461,6 @@ async def button_handler(update: Update, context: CallbackContext):
                 f"✅ Вы выбрали подпись:\n\n"
                 f"📝 «{signature}»\n\n"
                 f"🎁 Подарок для: {recipient_name}\n"
-                f"🆔 ID: {recipient_id}\n"
                 f"💰 Стоимость: {PRICE_STARS} ⭐️\n\n"
                 f"⬆️ Оплатите счёт выше."
             )
@@ -502,19 +483,10 @@ async def handle_recipient_input(update: Update, context: CallbackContext):
     input_text = update.message.text.strip()
     
     if not input_text.isdigit():
-        keyboard = [
-            [InlineKeyboardButton("🔄 Попробовать снова", callback_data="buy_for_other")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-        ]
-        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]]
         await update.message.reply_text(
-            f"❌ **Ошибка!**\n\n"
-            f"Вы ввели: `{input_text}`\n\n"
-            f"⚠️ ID должен быть **числом** (только цифры).\n\n"
-            f"📌 Пример правильного ID: `8619742582`\n\n"
-            f"Попробуйте снова:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
+            f"❌ ID должен быть числом!\nПопробуйте снова:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return WAITING_FOR_RECIPIENT
     
@@ -524,7 +496,6 @@ async def handle_recipient_input(update: Update, context: CallbackContext):
     
     try:
         recipient = await context.bot.get_chat(recipient_id)
-        
         recipient_name = recipient.full_name or "Неизвестный"
         recipient_username = recipient.username or "нет_username"
         
@@ -542,9 +513,8 @@ async def handle_recipient_input(update: Update, context: CallbackContext):
         await update.message.reply_text(
             f"✅ **Пользователь найден!**\n\n"
             f"👤 Имя: {recipient_name}\n"
-            f"📱 Username: @{recipient_username if recipient_username != 'нет_username' else 'не указан'}\n"
             f"🆔 ID: `{recipient_id}`\n\n"
-            f"Теперь выбери подпись для подарка:",
+            f"Теперь выбери подпись:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
@@ -553,23 +523,9 @@ async def handle_recipient_input(update: Update, context: CallbackContext):
     except Exception as e:
         await search_msg.delete()
         
-        keyboard = [
-            [InlineKeyboardButton("🔄 Попробовать снова", callback_data="buy_for_other")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]
-        ]
-        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")]]
         await update.message.reply_text(
-            f"❌ **Пользователь с ID {recipient_id} не найден.**\n\n"
-            f"⚠️ **Возможные причины:**\n"
-            f"• Пользователь никогда не писал боту\n"
-            f"• Неправильный ID\n"
-            f"• Пользователь заблокировал бота\n\n"
-            f"💡 **Как исправить:**\n"
-            f"1️⃣ Попросите получателя написать боту: /start\n"
-            f"2️⃣ После этого бот запомнит пользователя\n"
-            f"3️⃣ Попробуйте снова\n\n"
-            f"📌 Или используйте бота @userinfobot чтобы узнать свой ID\n\n"
-            f"Попробуйте снова:",
+            f"❌ Пользователь с ID {recipient_id} не найден.\nПопробуйте снова:",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return WAITING_FOR_RECIPIENT
@@ -581,156 +537,158 @@ async def cancel(update: Update, context: CallbackContext):
 
 async def pre_checkout(update: Update, context: CallbackContext):
     query = update.pre_checkout_query
-    if query.invoice_payload.startswith("gift_") and query.total_amount == PRICE_STARS:
-        await query.answer(ok=True)
-    else:
-        await query.answer(ok=False, error_message="Что-то пошло не так.")
+    
+    # Проверяем для Steam
+    if query.invoice_payload.startswith("steam_"):
+        if query.total_amount == STEAM_PRICE_STARS:
+            await query.answer(ok=True)
+        else:
+            await query.answer(ok=False, error_message="Неверная сумма.")
+        return
+    
+    # Проверяем для обычной росписи
+    if query.invoice_payload.startswith("gift_"):
+        if query.total_amount == PRICE_STARS:
+            await query.answer(ok=True)
+        else:
+            await query.answer(ok=False, error_message="Неверная сумма.")
+        return
+    
+    await query.answer(ok=False, error_message="Что-то пошло не так.")
 
 async def successful_payment(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     user = update.effective_user
-    signature = context.user_data.get('selected_signature', 'Без подписи')
+    payload = update.message.successful_payment.invoice_payload
     
-    recipient_id = context.user_data.get('recipient_id', user_id)
-    recipient_name = context.user_data.get('recipient_name', user.full_name or "Неизвестный")
-    recipient_username = context.user_data.get('recipient_username', user.username or "нет_username")
-    
-    try:
-        try:
-            test_user = await context.bot.get_chat(recipient_id)
-        except Exception as e:
-            logging.error(f"Ошибка проверки пользователя {recipient_id}: {e}")
+    # === STEAM РОСПИСЬ ===
+    if payload.startswith("steam_"):
+        # Находим заказ
+        order = next((o for o in steam_orders if o['user_id'] == user_id), None)
+        if not order:
             await update.message.reply_text(
-                f"❌ **Ошибка!**\n\n"
-                f"Получатель с ID {recipient_id} не найден.\n\n"
-                f"⚠️ Возможно, пользователь:\n"
-                f"• Никогда не писал боту\n"
-                f"• Заблокировал бота\n"
-                f"• Удалил аккаунт\n\n"
-                f"💰 Деньги будут возвращены на ваш счет.\n"
-                f"Свяжитесь с @Yatorokale для решения проблемы."
+                "❌ Ошибка: заказ не найден. Обратитесь к @Yatorokale"
             )
             return
         
-        await context.bot.send_gift(
-            user_id=recipient_id,
-            gift_id=GIFT_ID,
-            text=signature
-        )
-        
-        profit = PRICE_STARS - GIFT_COST
-        purchase = {
-            'buyer_id': user_id,
-            'buyer_name': user.full_name or "Неизвестный",
-            'buyer_username': user.username or "нет_username",
-            'recipient_id': recipient_id,
-            'recipient_name': recipient_name,
-            'recipient_username': recipient_username,
-            'signature': signature,
-            'price': PRICE_STARS,
-            'profit': profit,
-            'time': datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        }
-        purchase_history.append(purchase)
-        
-        try:
-            notification = (
-                f"🎁 НОВАЯ ПОКУПКА!\n\n"
-                f"👤 Покупатель: {user.full_name or 'Неизвестный'} (ID: {user_id})\n"
-                f"🎁 Получатель: {recipient_name} (ID: {recipient_id})\n"
-                f"📝 Подпись: {signature}\n"
-                f"💰 Стоимость: {PRICE_STARS} ⭐️\n"
-                f"📊 Прибыль: {profit} ⭐️\n"
-                f"🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
-            )
-            
-            await context.bot.send_message(chat_id=OWNER_ID, text=notification)
-        except Exception as e:
-            logging.error(f"Не удалось отправить уведомление: {e}")
-        
-        context.user_data.clear()
+        position = order['position']
         
         await update.message.reply_text(
-            f"✅ **Роспись успешно отправлена!**\n\n"
-            f"🎁 Получатель: {recipient_name}\n"
-            f"🆔 ID: {recipient_id}\n"
-            f"📝 Подпись: «{signature}»\n\n"
-            f"⭐️ Оплачено: {PRICE_STARS} звёзд\n\n"
-            f"Чтобы купить ещё, нажмите /start"
+            f"✅ **Оплата прошла успешно!**\n\n"
+            f"🎮 Ваша позиция в очереди: **{position}**\n\n"
+            f"⏳ Ожидайте {position} минут.\n"
+            f"Используйте /steam для проверки статуса.\n\n"
+            f"🔥 Ваша роспись будет доставлена автоматически!"
         )
         
-    except Exception as e:
-        error = str(e)
-        logging.error(f"Ошибка при отправке подарка: {error}")
+        # Уведомление владельцу
+        try:
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=f"🎮 НОВЫЙ ЗАКАЗ STEAM!\n\n"
+                     f"👤 Покупатель: {user.full_name} (ID: {user_id})\n"
+                     f"📊 Позиция: {position}\n"
+                     f"💰 {STEAM_PRICE_STARS} ⭐️"
+            )
+        except:
+            pass
+        return
+    
+    # === ОБЫЧНАЯ РОСПИСЬ ===
+    if payload.startswith("gift_"):
+        signature = context.user_data.get('selected_signature', 'Без подписи')
+        recipient_id = context.user_data.get('recipient_id', user_id)
+        recipient_name = context.user_data.get('recipient_name', user.full_name or "Неизвестный")
+        recipient_username = context.user_data.get('recipient_username', user.username or "нет_username")
         
-        if "STARGIFT_USAGE_LIMITED" in error:
-            await update.message.reply_text(
-                f"❌ **Этот подарок уже распродан.**\n\n"
-                f"Свяжитесь с @Yatorokale для решения проблемы."
+        try:
+            await context.bot.send_gift(
+                user_id=recipient_id,
+                gift_id=GIFT_ID,
+                text=signature
             )
-        elif "USER_NOT_FOUND" in error or "user not found" in error.lower():
+            
+            profit = PRICE_STARS - GIFT_COST
+            purchase = {
+                'buyer_id': user_id,
+                'buyer_name': user.full_name or "Неизвестный",
+                'buyer_username': user.username or "нет_username",
+                'recipient_id': recipient_id,
+                'recipient_name': recipient_name,
+                'recipient_username': recipient_username,
+                'signature': signature,
+                'price': PRICE_STARS,
+                'profit': profit,
+                'time': datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            }
+            purchase_history.append(purchase)
+            
             await update.message.reply_text(
-                f"❌ **Получатель не найден!**\n\n"
-                f"Пользователь с ID {recipient_id} не существует или не писал боту.\n\n"
-                f"💡 Попросите получателя написать боту: /start\n"
-                f"После этого повторите попытку."
+                f"✅ **Роспись успешно отправлена!**\n\n"
+                f"🎁 Получатель: {recipient_name}\n"
+                f"📝 Подпись: «{signature}»\n\n"
+                f"⭐️ Оплачено: {PRICE_STARS} звёзд"
             )
-        else:
-            await update.message.reply_text(f"❌ Ошибка: {error}")
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {e}")
+        return
+
+# ========== ЗАПУСК БОТА ==========
 
 def main():
-    """Основная функция запуска бота"""
-    # Загружаем пользователей из файла (если есть)
-    load_users_from_file()
+    global steam_orders
+    
+    # Загружаем заказы
+    steam_orders = load_steam_orders()
+    print(f"🎮 Загружено Steam заказов: {len(steam_orders)}")
+    print(f"👥 Загружено пользователей: {len(users)}")
     
     application = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(button_handler, pattern="^buy_for_other$")
-        ],
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^buy_for_other$")],
         states={
             WAITING_FOR_RECIPIENT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_recipient_input)
             ],
         },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(button_handler, pattern="^back_to_menu$")
-        ],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(button_handler, pattern="^back_to_menu$")],
     )
     
     # Основные команды
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("steam", steam_status))
     application.add_handler(conv_handler)
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     
-    # Команды для владельца
+    # Команды владельца
     application.add_handler(CommandHandler("broadcast", broadcast))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("users", users_list))
-    application.add_handler(CommandHandler("import", import_users_file))
     application.add_handler(CommandHandler("adduser", add_user))
     application.add_handler(CommandHandler("addusers", add_users_batch))
     application.add_handler(CommandHandler("test", test))
-    application.add_handler(CommandHandler("resetwebhook", reset_webhook))
+    
+    # Запускаем проверку очереди каждую минуту
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_repeating(check_steam_orders, interval=60, first=10)
+        print("⏰ Запущена проверка очереди (каждую минуту)")
     
     print("🤖 Бот запущен...")
     print(f"👤 Владелец: {OWNER_ID}")
-    print(f"⭐️ Цена: {PRICE_STARS} звёзд")
-    print(f"🎁 ID подарка: {GIFT_ID}")
-    print(f"📝 Подписей: {len(SIGNATURES)}")
+    print(f"🎮 Steam цена: {STEAM_PRICE_STARS} ⭐️")
     print(f"👥 Пользователей: {len(users)}")
+    print(f"🎮 Заказов в очереди: {len(steam_orders)}")
     print("=" * 50)
     
-    # Запускаем бота
     application.run_polling()
 
-# ========== НАСТРОЙКА ДЛЯ RENDER ==========
+# ========== FLASK ДЛЯ RENDER ==========
 
-# Создаем Flask приложение для health check
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -742,17 +700,13 @@ def health():
     return "OK"
 
 if __name__ == "__main__":
-    # Запускаем бота в ГЛАВНОМ потоке
-    # Запускаем Flask в отдельном потоке для health check
     import threading
     
     def run_flask():
         port = int(os.environ.get("PORT", 5000))
         flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
     
-    # Запускаем Flask в фоновом потоке
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Запускаем бота в главном потоке
     main()
