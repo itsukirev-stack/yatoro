@@ -19,7 +19,7 @@ STEAM_PRICE_STARS = 350
 GIFT_COST = 15
 GIFT_ID = "5170233102089322756"
 
-# Каналы для подписки
+# Каналы для подписки (НЕОБЯЗАТЕЛЬНО)
 REQUIRED_CHANNELS = [
     {"name": "Yatorokale", "url": "https://t.me/Yatorokale", "chat_id": "@Yatorokale"},
     {"name": "Team Spirit Official", "url": "https://t.me/Team_Spirit_Official", "chat_id": "@Team_Spirit_Official"}
@@ -85,18 +85,18 @@ def save_user(user_id, username, full_name):
         return True
     return False
 
-# ========== ПРОВЕРКА ПОДПИСКИ ==========
+# ========== ПРОВЕРКА ПОДПИСКИ (НЕОБЯЗАТЕЛЬНАЯ) ==========
 
 async def check_subscription(update: Update, context: CallbackContext) -> bool:
-    """Проверяет, подписан ли пользователь на все каналы"""
+    """Проверяет подписку на каналы (НЕОБЯЗАТЕЛЬНО)"""
     user_id = update.effective_user.id
     
-    # Владельца не проверяем
+    # Владельца пропускаем
     if user_id == OWNER_ID:
         return True
     
+    # Проверяем подписку
     not_subscribed = []
-    
     for channel in REQUIRED_CHANNELS:
         try:
             chat_member = await context.bot.get_chat_member(
@@ -105,14 +105,14 @@ async def check_subscription(update: Update, context: CallbackContext) -> bool:
             )
             if chat_member.status not in ['member', 'administrator', 'creator']:
                 not_subscribed.append(channel)
-        except Exception as e:
+        except:
             not_subscribed.append(channel)
     
     if not_subscribed:
         keyboard = []
         for channel in not_subscribed:
             keyboard.append([InlineKeyboardButton(
-                f"📢 Подписаться на {channel['name']}",
+                f"📢 Подписаться на {channel['name']} (НЕОБЯЗАТЕЛЬНО)",
                 url=channel['url']
             )])
         
@@ -120,15 +120,19 @@ async def check_subscription(update: Update, context: CallbackContext) -> bool:
             "✅ Я подписался! Проверить",
             callback_data="check_subscription"
         )])
+        keyboard.append([InlineKeyboardButton(
+            "➡️ Пропустить и продолжить",
+            callback_data="skip_subscription"
+        )])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
         
         await update.message.reply_text(
-            f"⚠️ **Для использования бота необходимо подписаться на каналы!**\n\n"
+            f"📢 **Подпишись на наши каналы (НЕОБЯЗАТЕЛЬНО)!**\n\n"
             f"🔥 Подпишись на:\n{channels_text}\n\n"
-            f"После подписки нажми кнопку «✅ Я подписался! Проверить»\n\n"
-            f"🎁 Только для подписчиков доступны эксклюзивные росписи и скидки!",
+            f"🎁 Подписка даст тебе доступ к эксклюзивным предложениям!\n\n"
+            f"Можешь пропустить и продолжить 👇",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -144,11 +148,13 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     
     if user_id == OWNER_ID:
-        await query.edit_message_text("✅ Вы владелец, доступ открыт!")
+        try:
+            await query.edit_message_text("✅ Вы владелец, доступ открыт!")
+        except:
+            pass
         return
     
     not_subscribed = []
-    
     for channel in REQUIRED_CHANNELS:
         try:
             chat_member = await context.bot.get_chat_member(
@@ -157,15 +163,14 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
             )
             if chat_member.status not in ['member', 'administrator', 'creator']:
                 not_subscribed.append(channel)
-        except Exception as e:
-            print(f"Ошибка проверки {channel['name']}: {e}")
+        except:
             not_subscribed.append(channel)
     
     if not_subscribed:
         keyboard = []
         for channel in not_subscribed:
             keyboard.append([InlineKeyboardButton(
-                f"📢 Подписаться на {channel['name']}",
+                f"📢 Подписаться на {channel['name']} (НЕОБЯЗАТЕЛЬНО)",
                 url=channel['url']
             )])
         
@@ -173,24 +178,35 @@ async def check_subscription_callback(update: Update, context: CallbackContext):
             "✅ Я подписался! Проверить",
             callback_data="check_subscription"
         )])
+        keyboard.append([InlineKeyboardButton(
+            "➡️ Пропустить и продолжить",
+            callback_data="skip_subscription"
+        )])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
         
-        await query.edit_message_text(
-            f"⚠️ **Вы ещё не подписаны на все каналы!**\n\n"
-            f"🔥 Подпишись на:\n{channels_text}\n\n"
-            f"После подписки нажми кнопку «✅ Я подписался! Проверить»",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        try:
+            await query.edit_message_text(
+                f"📢 **Подпишись на наши каналы (НЕОБЯЗАТЕЛЬНО)!**\n\n"
+                f"🔥 Подпишись на:\n{channels_text}\n\n"
+                f"🎁 Подписка даст тебе доступ к эксклюзивным предложениям!\n\n"
+                f"Можешь пропустить и продолжить 👇",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        except:
+            pass
         return
     
-    await query.edit_message_text(
-        "✅ **Спасибо за подписку!**\n\n"
-        "🔥 Теперь вам доступны все функции бота!\n"
-        "Нажмите /start чтобы продолжить."
-    )
+    try:
+        await query.edit_message_text(
+            "✅ **Спасибо за подписку!**\n\n"
+            "🔥 Теперь вам доступны все функции бота!\n"
+            "Нажмите /start чтобы продолжить."
+        )
+    except:
+        pass
 
 # ========== КОМАНДЫ ДЛЯ ВЛАДЕЛЬЦА ==========
 
@@ -393,6 +409,7 @@ async def start(update: Update, context: CallbackContext):
     user = update.effective_user
     save_user(user.id, user.username or "нет_username", user.full_name or "Неизвестный")
     
+    # Проверка подписки (НЕОБЯЗАТЕЛЬНАЯ)
     if not await check_subscription(update, context):
         return
     
@@ -414,7 +431,7 @@ async def show_main_menu_message(message, user_id):
         f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
         f"💰 Обычная роспись: {PRICE_STARS} ⭐️\n"
         f"🎮 Роспись в Steam: {STEAM_PRICE_STARS} ⭐️\n\n"
-        f"📢 Наши каналы:\n"
+        f"📢 Наши каналы (подписка НЕОБЯЗАТЕЛЬНА):\n"
         f"• https://t.me/Yatorokale\n"
         f"• https://t.me/Team_Spirit_Official\n\n"
         f"🔥 Подпишись и получай эксклюзивные предложения!\n\n"
@@ -438,7 +455,7 @@ async def show_main_menu(query, user_id):
         f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
         f"💰 Обычная роспись: {PRICE_STARS} ⭐️\n"
         f"🎮 Роспись в Steam: {STEAM_PRICE_STARS} ⭐️\n\n"
-        f"📢 Наши каналы:\n"
+        f"📢 Наши каналы (подписка НЕОБЯЗАТЕЛЬНА):\n"
         f"• https://t.me/Yatorokale\n"
         f"• https://t.me/Team_Spirit_Official\n\n"
         f"🔥 Подпишись и получай эксклюзивные предложения!\n\n"
@@ -453,50 +470,25 @@ async def button_handler(update: Update, context: CallbackContext):
     data = query.data
     user_id = update.effective_user.id
     
-    # ===== ПРОВЕРКА ПОДПИСКИ (ДО ВСЕХ ОСТАЛЬНЫХ ДЕЙСТВИЙ) =====
+    # ===== ПРОВЕРКА ПОДПИСКИ =====
     if data == "check_subscription":
         await check_subscription_callback(update, context)
         return
     
-    # ===== ДЛЯ ВСЕХ ОСТАЛЬНЫХ ДЕЙСТВИЙ ПРОВЕРЯЕМ ПОДПИСКУ =====
-    if user_id != OWNER_ID:
-        not_subscribed = []
-        for channel in REQUIRED_CHANNELS:
-            try:
-                chat_member = await context.bot.get_chat_member(
-                    chat_id=channel['chat_id'],
-                    user_id=user_id
-                )
-                if chat_member.status not in ['member', 'administrator', 'creator']:
-                    not_subscribed.append(channel)
-            except:
-                not_subscribed.append(channel)
-        
-        if not_subscribed:
-            keyboard = []
-            for channel in not_subscribed:
-                keyboard.append([InlineKeyboardButton(
-                    f"📢 Подписаться на {channel['name']}",
-                    url=channel['url']
-                )])
-            keyboard.append([InlineKeyboardButton(
-                "✅ Я подписался! Проверить",
-                callback_data="check_subscription"
-            )])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            channels_text = "\n".join([f"• {ch['name']}" for ch in not_subscribed])
-            
+    if data == "skip_subscription":
+        try:
             await query.edit_message_text(
-                f"⚠️ **Для использования бота необходимо подписаться на каналы!**\n\n"
-                f"🔥 Подпишись на:\n{channels_text}\n\n"
-                f"После подписки нажми кнопку «✅ Я подписался! Проверить»",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
+                "✅ **Пропускаем подписку!**\n\n"
+                "🔥 Но помни - подписка даёт доступ к эксклюзивным предложениям!\n"
+                "Нажми /start чтобы продолжить."
             )
-            return
+        except:
+            pass
+        # Показываем меню
+        await show_main_menu(query, user_id)
+        return
     
-    # ===== ДАЛЬШЕ ВСЕ ОСТАЛЬНЫЕ ДЕЙСТВИЯ =====
+    # ===== ДЛЯ ВСЕХ ОСТАЛЬНЫХ ДЕЙСТВИЙ ПРОВЕРЯЕМ ПОДПИСКУ (НО НЕ БЛОКИРУЕМ) =====
     if data == "show_history":
         if user_id != OWNER_ID:
             await query.edit_message_text("❌ У вас нет доступа.")
