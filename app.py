@@ -14,13 +14,14 @@ if not TOKEN:
     raise ValueError("TELEGRAM_TOKEN не найден!")
 
 OWNER_ID = 8619742582
-PRICE_STARS = 20  # Цена за обычную роспись
-STEAM_PRICE_STARS = 350  # Цена за роспись в Steam
+PRICE_STARS = 20
+STEAM_PRICE_STARS = 350
 GIFT_COST = 15
 GIFT_ID = "SIMPLE_BEAR_ID"
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
+WAITING_FOR_STEAM_LINK = 2
 purchase_history = []
 steam_orders = []  # Список заказов на роспись в Steam
 users = []
@@ -246,16 +247,16 @@ async def check_steam_orders(context: CallbackContext):
     save_steam_orders()
 
 async def steam_status(update: Update, context: CallbackContext):
-    """Показывает позицию в очереди"""
+    """Показывает позицию в очереди (ТОЛЬКО ПОСЛЕ ОПЛАТЫ)"""
     user_id = update.effective_user.id
     
-    # Ищем заказ пользователя
-    order = next((o for o in steam_orders if o['user_id'] == user_id), None)
+    # Ищем заказ пользователя ТОЛЬКО среди оплаченных
+    order = next((o for o in steam_orders if o['user_id'] == user_id and o.get('paid', False)), None)
     
     if not order:
         await update.message.reply_text(
-            "❌ У вас нет активных заказов на роспись в Steam.\n\n"
-            "Чтобы заказать, нажмите кнопку **'Роспись в Steam от Yatoro'** в меню."
+            "❌ У вас нет активных оплаченных заказов.\n\n"
+            "Чтобы заказать, нажмите кнопку **'Роспись в Steam от Yatoro'** в меню и оплатите."
         )
         return
     
@@ -265,7 +266,6 @@ async def steam_status(update: Update, context: CallbackContext):
     if position > 0:
         await update.message.reply_text(
             f"🎮 **Ваша позиция в очереди: {position}**\n\n"
-            f"⏳ Осталось примерно: {position} минут\n"
             f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
             f"🔥 Ожидайте! Ваша роспись скоро будет готова!"
         )
@@ -370,8 +370,7 @@ async def button_handler(update: Update, context: CallbackContext):
         if existing:
             await query.edit_message_text(
                 "❌ У вас уже есть активный заказ!\n\n"
-                f"Ваша позиция в очереди: {existing['position']}\n"
-                f"Используйте /steam для проверки статуса."
+                "Используйте /steam для проверки статуса."
             )
             return
         
@@ -381,7 +380,9 @@ async def button_handler(update: Update, context: CallbackContext):
             'user_id': user_id,
             'position': position,
             'created_at': datetime.now().isoformat(),
-            'profit': STEAM_PRICE_STARS - GIFT_COST
+            'profit': STEAM_PRICE_STARS - GIFT_COST,
+            'paid': False,  # Важно: не оплачен!
+            'steam_link': None
         }
         steam_orders.append(order)
         save_steam_orders()
@@ -406,8 +407,7 @@ async def button_handler(update: Update, context: CallbackContext):
                 f"🎮 Ваша позиция в очереди: **{position}**\n\n"
                 f"💰 Стоимость: {STEAM_PRICE_STARS} ⭐️\n\n"
                 f"⬆️ Оплатите счёт выше.\n\n"
-                f"После оплаты вы получите уведомление о вашей позиции.\n"
-                f"Используйте /steam для проверки статуса."
+                f"После оплаты укажите ссылку на ваш профиль Steam."
             )
         except Exception as e:
             await query.edit_message_text(f"❌ Ошибка: {e}")
@@ -555,6 +555,35 @@ async def pre_checkout(update: Update, context: CallbackContext):
     
     await query.answer(ok=False, error_message="Что-то пошло не так.")
 
+async def handle_steam_link(update: Update, context: CallbackContext):
+    """Обрабатывает ссылку на Steam после оплаты"""
+    user_id = update.effective_user.id
+    steam_link = update.message.text.strip()
+    
+    # Проверяем, есть ли заказ
+    order = next((o for o in steam_orders if o['user_id'] == user_id and o.get('paid', False)), None)
+    
+    if not order:
+        await update.message.reply_text(
+            "❌ У вас нет оплаченных заказов.\n\n"
+            "Чтобы заказать, нажмите кнопку **'Роспись в Steam от Yatoro'** в меню."
+        )
+        return
+    
+    # Сохраняем ссылку
+    order['steam_link'] = steam_link
+    save_steam_orders()
+    
+    position = order['position']
+    created_at = datetime.fromisoformat(order['created_at'])
+    
+    await update.message.reply_text(
+        f"✅ **Ссылка на Steam принята!**\n\n"
+        f"🎮 Ваша позиция в очереди: **{position}**\n\n"
+        f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"🔥 Ожидайте! Ваша роспись будет доставлена автоматически!"
+    )
+
 async def successful_payment(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     user = update.effective_user
@@ -570,14 +599,9 @@ async def successful_payment(update: Update, context: CallbackContext):
             )
             return
         
-        position = order['position']
-        
-        await update.message.reply_text(
-            f"✅ **Оплата прошла успешно!**\n\n"
-            f"🎮 Ваша позиция в очереди: **{position}**\n\n"
-            f"🔥 Ваша роспись будет доставлена автоматически!\n"
-            f"Используйте /steam для проверки статуса."
-        )
+        # Отмечаем как оплаченный
+        order['paid'] = True
+        save_steam_orders()
         
         # Уведомление владельцу
         try:
@@ -585,11 +609,19 @@ async def successful_payment(update: Update, context: CallbackContext):
                 chat_id=OWNER_ID,
                 text=f"🎮 НОВЫЙ ЗАКАЗ STEAM!\n\n"
                      f"👤 Покупатель: {user.full_name} (ID: {user_id})\n"
-                     f"📊 Позиция: {position}\n"
+                     f"📊 Позиция: {order['position']}\n"
                      f"💰 {STEAM_PRICE_STARS} ⭐️"
             )
         except:
             pass
+        
+        # Просим ссылку на Steam
+        await update.message.reply_text(
+            f"✅ **Оплата прошла успешно!**\n\n"
+            f"🎮 Теперь отправьте ссылку на ваш профиль Steam:\n\n"
+            f"📌 Пример: `https://steamcommunity.com/id/ваш_ник/`\n\n"
+            f"Или: `https://steamcommunity.com/profiles/76561198000000000/`"
+        )
         return
     
     # === ОБЫЧНАЯ РОСПИСЬ ===
@@ -661,6 +693,7 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(PreCheckoutQueryHandler(pre_checkout))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_steam_link))
     
     # Команды владельца
     application.add_handler(CommandHandler("broadcast", broadcast))
