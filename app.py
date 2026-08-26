@@ -9,10 +9,14 @@ from flask import Flask
 from telegram import Update, LabeledPrice, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, PreCheckoutQueryHandler, MessageHandler, CallbackQueryHandler, filters, CallbackContext, ConversationHandler
 
+# ========== ОТКЛЮЧАЕМ ЛОГИ HTTPX ==========
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # ========== НАСТРОЙКИ ==========
 TOKEN = "8994853122:AAGQkUeIxC-YN28w_haXSVEZVK2jFRZDgts"
 OWNER_ID = 8619742582
-PRICE_STARS = 20
+PRICE_STARS = 5
 STEAM_PRICE_STARS = 350
 GIFT_COST = 15
 GIFT_ID = "5170233102089322756"  # ЗАМЕНИТЕ НА ПРАВИЛЬНЫЙ ID МЕДВЕДЯ
@@ -30,6 +34,25 @@ SIGNATURES = [
 ]
 
 logging.basicConfig(level=logging.INFO)
+
+# ========== FLASK СЕРВЕР ДЛЯ RENDER ==========
+app_flask = Flask(__name__)
+
+@app_flask.route('/')
+@app_flask.route('/health')
+def health():
+    return {"status": "running", "timestamp": datetime.now().isoformat()}
+
+@app_flask.route('/stats')
+def stats():
+    return {
+        "steam_orders": len(steam_orders),
+        "purchases": len(purchase_history)
+    }
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # ========== РАБОТА С ФАЙЛАМИ ДЛЯ STEAM ==========
 
@@ -62,7 +85,7 @@ async def check_steam_orders(context: CallbackContext):
     orders_to_remove = []
     
     for i, order in enumerate(steam_orders):
-        if order.get('paid', False) and order['position'] > 0:
+        if order.get('paid', False) and order.get('position', 0) > 0:
             order['position'] -= 1
         
         if order.get('paid', False):
@@ -105,24 +128,38 @@ async def steam_status(update: Update, context: CallbackContext):
         )
         return
     
-    position = order['position']
+    position = order.get('position', 0)
     created_at = datetime.fromisoformat(order['created_at'])
+    steam_link = order.get('steam_link', 'Не указан')
     
     if position > 0:
         await update.message.reply_text(
             f"🎮 **Ваша позиция в очереди: {position}**\n\n"
-            f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            f"🔗 Ссылка: {steam_link}\n\n"
             f"🔥 Ожидайте! Ваша роспись скоро будет готова!"
         )
     else:
         await update.message.reply_text(
             "🎉 **ВАША РОСПИСЬ ГОТОВА!**\n\n"
+            f"🔗 Ссылка: {steam_link}\n"
             "✅ Ожидайте уведомление о доставке!"
         )
 
 async def handle_steam_link(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     steam_link = update.message.text.strip()
+    
+    # Проверяем, что это ссылка на Steam
+    if not steam_link.startswith(('https://steamcommunity.com/', 'https://steamcommunity.com/profiles/', 'https://steamcommunity.com/id/')):
+        await update.message.reply_text(
+            "❌ Это не похоже на ссылку Steam.\n\n"
+            "Пожалуйста, отправьте ссылку вида:\n"
+            "`https://steamcommunity.com/id/ваш_ник/`\n"
+            "или\n"
+            "`https://steamcommunity.com/profiles/76561198000000000/`"
+        )
+        return
     
     order = next((o for o in steam_orders if o['user_id'] == user_id and o.get('paid', False)), None)
     
@@ -136,13 +173,14 @@ async def handle_steam_link(update: Update, context: CallbackContext):
     order['steam_link'] = steam_link
     save_steam_orders()
     
-    position = order['position']
+    position = order.get('position', 0)
     created_at = datetime.fromisoformat(order['created_at'])
     
     await update.message.reply_text(
         f"✅ **Ссылка на Steam принята!**\n\n"
         f"🎮 Ваша позиция в очереди: **{position}**\n\n"
-        f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📅 Заказано: {created_at.strftime('%d.%m.%Y %H:%M')}\n"
+        f"🔗 Ссылка: {steam_link}\n\n"
         f"🔥 Ожидайте! Ваша роспись будет доставлена автоматически!"
     )
 
@@ -211,7 +249,7 @@ async def button_handler(update: Update, context: CallbackContext):
             if existing.get('paid', False):
                 await query.edit_message_text(
                     "❌ У вас уже есть оплаченный заказ!\n\n"
-                    f"Ваша позиция в очереди: {existing['position']}\n"
+                    f"Ваша позиция в очереди: {existing.get('position', 0)}\n"
                     "Используйте /steam для проверки статуса."
                 )
             else:
@@ -444,6 +482,7 @@ async def successful_payment(update: Update, context: CallbackContext):
             return
         
         order['paid'] = True
+        order['created_at'] = datetime.now().isoformat()
         save_steam_orders()
         
         try:
@@ -543,6 +582,13 @@ def main():
     steam_orders = load_steam_orders()
     print(f"🎮 Загружено Steam заказов: {len(steam_orders)}")
     
+    # Запускаем Flask в отдельном потоке (для Render)
+    import threading
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print("🌐 Flask сервер запущен на порту 10000")
+    
+    # Запускаем бота
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
