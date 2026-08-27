@@ -23,6 +23,7 @@ GIFT_ID = "5170233102089322756"  # ЗАМЕНИТЕ НА ПРАВИЛЬНЫЙ ID
 # ================================
 
 WAITING_FOR_RECIPIENT = 1
+WAITING_FOR_FREE_GIFT = 2  # Новое состояние для бесплатного подарка
 
 purchase_history = []
 steam_orders = []  # Список заказов на роспись в Steam
@@ -187,14 +188,16 @@ async def handle_steam_link(update: Update, context: CallbackContext):
 # ========== ОСНОВНОЙ КОД ==========
 
 async def start(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
     keyboard = [
         [InlineKeyboardButton("🎁 Купить для себя", callback_data="buy_for_self")],
         [InlineKeyboardButton("🎁 Подарить другому", callback_data="buy_for_other")],
         [InlineKeyboardButton("🎮 Роспись в Steam от Yatoro", callback_data="buy_steam")]
     ]
     
-    if update.effective_user.id == OWNER_ID:
+    if user_id == OWNER_ID:
         keyboard.append([InlineKeyboardButton("📜 История покупок", callback_data="show_history")])
+        keyboard.append([InlineKeyboardButton("🎁 Бесплатный подарок (владелец)", callback_data="free_gift")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -241,6 +244,20 @@ async def button_handler(update: Update, context: CallbackContext):
     if data == "back_to_menu":
         await show_main_menu(query, user_id)
         return
+    
+    # === БЕСПЛАТНЫЙ ПОДАРОК ДЛЯ ВЛАДЕЛЬЦА ===
+    if data == "free_gift":
+        if user_id != OWNER_ID:
+            await query.edit_message_text("❌ У вас нет доступа.")
+            return
+        
+        await query.edit_message_text(
+            "🎁 **Бесплатный подарок от имени бота**\n\n"
+            "Введите **ID** получателя (число):\n\n"
+            "Пример: `123456789`\n\n"
+            "Или отправьте /cancel для отмены."
+        )
+        return WAITING_FOR_FREE_GIFT
     
     # === STEAM РОСПИСЬ ===
     if data == "buy_steam":
@@ -370,6 +387,7 @@ async def show_main_menu(query, user_id):
     
     if user_id == OWNER_ID:
         keyboard.append([InlineKeyboardButton("📜 История покупок", callback_data="show_history")])
+        keyboard.append([InlineKeyboardButton("🎁 Бесплатный подарок (владелец)", callback_data="free_gift")])
     
     await query.edit_message_text(
         f"👋 Привет! Здесь ты можешь купить уникальную роспись от Яторо🖊️!\n\n"
@@ -443,6 +461,157 @@ async def handle_recipient_input(update: Update, context: CallbackContext):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return WAITING_FOR_RECIPIENT
+
+# ========== ОБРАБОТЧИК ДЛЯ БЕСПЛАТНОГО ПОДАРКА ==========
+
+async def handle_free_gift_input(update: Update, context: CallbackContext):
+    user_id = update.effective_user.id
+    
+    # Проверяем, что это владелец
+    if user_id != OWNER_ID:
+        await update.message.reply_text("❌ У вас нет доступа к этой функции.")
+        return ConversationHandler.END
+    
+    recipient_id_input = update.message.text.strip()
+    
+    # Проверяем, что это число
+    try:
+        recipient_id = int(recipient_id_input)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ **Неверный формат!**\n\n"
+            "ID должен быть числом.\n\n"
+            "Пример: `123456789`\n\n"
+            "Попробуйте снова или отправьте /cancel для отмены."
+        )
+        return WAITING_FOR_FREE_GIFT
+    
+    # Проверяем, что пользователь существует
+    try:
+        recipient = await context.bot.get_chat(recipient_id)
+        recipient_name = recipient.full_name or "Неизвестный"
+        recipient_username = recipient.username or "нет_username"
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ **Пользователь с ID {recipient_id} не найден.**\n\n"
+            f"Ошибка: {str(e)}\n\n"
+            f"Попробуйте снова или отправьте /cancel для отмены."
+        )
+        return WAITING_FOR_FREE_GIFT
+    
+    # Сохраняем получателя
+    context.user_data['recipient_id'] = recipient_id
+    context.user_data['recipient_name'] = recipient_name
+    context.user_data['recipient_username'] = recipient_username
+    context.user_data['is_free_gift'] = True  # Маркер бесплатного подарка
+    
+    # Показываем выбор подписи
+    keyboard = []
+    for i, signature in enumerate(SIGNATURES):
+        keyboard.append([InlineKeyboardButton(f"📝 {signature}", callback_data=f"free_sig_{i}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_menu")])
+    
+    await update.message.reply_text(
+        f"✅ **Пользователь найден!**\n\n"
+        f"👤 Имя: {recipient_name}\n"
+        f"📱 Username: @{recipient_username if recipient_username != 'нет_username' else 'не указан'}\n"
+        f"🆔 ID: {recipient_id}\n\n"
+        f"🎁 **Бесплатный подарок!**\n\n"
+        f"Теперь выбери подпись для подарка:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return ConversationHandler.END
+
+# ========== ОБРАБОТЧИК ВЫБОРА ПОДПИСИ ДЛЯ БЕСПЛАТНОГО ПОДАРКА ==========
+
+async def free_gift_signature_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем, что это владелец
+    if user_id != OWNER_ID:
+        await query.edit_message_text("❌ У вас нет доступа.")
+        return
+    
+    data = query.data
+    
+    if data.startswith("free_sig_"):
+        signature_index = int(data.replace("free_sig_", ""))
+        signature = SIGNATURES[signature_index]
+        
+        recipient_id = context.user_data.get('recipient_id')
+        recipient_name = context.user_data.get('recipient_name', 'Неизвестный')
+        recipient_username = context.user_data.get('recipient_username', 'нет_username')
+        
+        if not recipient_id:
+            await query.edit_message_text("❌ Ошибка: получатель не найден.")
+            return
+        
+        # Отправляем бесплатный подарок
+        try:
+            url = f"https://api.telegram.org/bot{TOKEN}/sendGift"
+            data = {
+                "user_id": recipient_id,
+                "gift_id": GIFT_ID,
+                "text": signature
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+                    if not result.get('ok'):
+                        raise Exception(result.get('description', 'Неизвестная ошибка'))
+            
+            # Добавляем в историю как бесплатный подарок
+            purchase = {
+                'buyer_id': user_id,
+                'buyer_name': "Владелец (бесплатно)",
+                'buyer_username': "owner",
+                'recipient_id': recipient_id,
+                'recipient_name': recipient_name,
+                'recipient_username': recipient_username,
+                'signature': signature,
+                'price': 0,  # Бесплатно
+                'profit': 0,
+                'time': datetime.now().strftime("%d.%m.%Y %H:%M:%S"),
+                'is_free': True
+            }
+            purchase_history.append(purchase)
+            
+            # Уведомление владельцу об успехе
+            await query.edit_message_text(
+                f"✅ **Бесплатный подарок успешно отправлен!**\n\n"
+                f"🎁 Получатель: {recipient_name} (@{recipient_username if recipient_username != 'нет_username' else 'не указан'})\n"
+                f"🆔 ID: {recipient_id}\n"
+                f"📝 Подпись: «{signature}»\n\n"
+                f"💰 Стоимость: БЕСПЛАТНО"
+            )
+            
+            # Уведомляем получателя
+            try:
+                await context.bot.send_message(
+                    chat_id=recipient_id,
+                    text=f"🎁 **Вам отправили подарок!**\n\n"
+                         f"📝 Подпись: «{signature}»\n\n"
+                         f"❤️ Поздравляем!"
+                )
+            except:
+                pass
+            
+        except Exception as e:
+            error = str(e)
+            if "STARGIFT_USAGE_LIMITED" in error:
+                await query.edit_message_text("❌ Этот подарок уже распродан.")
+            else:
+                await query.edit_message_text(f"❌ Ошибка: {error}")
+        
+        # Очищаем данные
+        context.user_data.pop('recipient_id', None)
+        context.user_data.pop('recipient_name', None)
+        context.user_data.pop('recipient_username', None)
+        context.user_data.pop('is_free_gift', None)
 
 async def cancel(update: Update, context: CallbackContext):
     await update.message.reply_text("❌ Операция отменена.")
@@ -591,6 +760,7 @@ def main():
     # Запускаем бота
     app = Application.builder().token(TOKEN).build()
     
+    # ConversationHandler для обычного подарка
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(button_handler, pattern="^buy_for_other$")],
         states={
@@ -599,10 +769,21 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     
+    # ConversationHandler для бесплатного подарка владельца
+    free_gift_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button_handler, pattern="^free_gift$")],
+        states={
+            WAITING_FOR_FREE_GIFT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_gift_input)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("steam", steam_status))
     app.add_handler(conv_handler)
+    app.add_handler(free_gift_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(free_gift_signature_handler, pattern="^free_sig_"))
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_steam_link))
